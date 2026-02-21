@@ -35,6 +35,21 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 - `codex` and/or `claude` installed and logged in
 - [Bun](https://bun.com) to build/run from source. Prebuilt binaries do not require Bun.
 
+## Install prebuilt binary
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash
+```
+
+Pin to a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash -s -- 1.0.2
+```
+
+Accepted installer targets: `stable`, `latest`, or a version (`1.0.2`, `v1.0.2`).
+Installer currently supports macOS and Linux and installs to `~/.local/bin/loop` by default.
+
 ## Quick start
 
 ```bash
