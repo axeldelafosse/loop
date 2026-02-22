@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -390,6 +391,279 @@ test("handleManualUpdateCommand stages update with correct metadata", async () =
     });
     globalThis.fetch = originalFetch;
     console.log = originalLog;
+    if (existsSync(STAGED_BINARY)) {
+      unlinkSync(STAGED_BINARY);
+    }
+    if (existsSync(METADATA_FILE)) {
+      unlinkSync(METADATA_FILE);
+    }
+  }
+});
+
+// --- parseReleaseResponse ---
+
+test("parseReleaseResponse accepts valid input", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  const result = parseReleaseResponse({
+    tag_name: "v1.0.0",
+    assets: [
+      {
+        name: "loop-macos-arm64",
+        browser_download_url: "https://example.com/binary",
+      },
+    ],
+  });
+  expect(result.tag_name).toBe("v1.0.0");
+  expect(result.assets).toHaveLength(1);
+});
+
+test("parseReleaseResponse throws for non-object", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  expect(() => parseReleaseResponse("not an object")).toThrow(
+    "expected an object"
+  );
+  expect(() => parseReleaseResponse(null)).toThrow("expected an object");
+});
+
+test("parseReleaseResponse throws for missing tag_name", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  expect(() => parseReleaseResponse({ assets: [] })).toThrow(
+    "missing or invalid tag_name"
+  );
+});
+
+test("parseReleaseResponse throws for missing assets", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  expect(() => parseReleaseResponse({ tag_name: "v1.0.0" })).toThrow(
+    "missing or invalid assets"
+  );
+});
+
+test("parseReleaseResponse throws for asset missing name", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  expect(() =>
+    parseReleaseResponse({
+      tag_name: "v1.0.0",
+      assets: [{ browser_download_url: "https://example.com" }],
+    })
+  ).toThrow("asset missing name");
+});
+
+test("parseReleaseResponse throws for asset missing browser_download_url", async () => {
+  const { parseReleaseResponse } = await import("../../src/loop/update");
+  expect(() =>
+    parseReleaseResponse({
+      tag_name: "v1.0.0",
+      assets: [{ name: "loop-macos-arm64" }],
+    })
+  ).toThrow("asset missing browser_download_url");
+});
+
+// --- SHA-256 checksum verification ---
+
+test("update verifies matching checksum", async () => {
+  const binaryData = "fake-binary-data";
+  const expectedHash = createHash("sha256").update(binaryData).digest("hex");
+
+  const osName = process.platform === "darwin" ? "macos" : "linux";
+  const assetName = `loop-${osName}-${process.arch}`;
+
+  const originalExecPath = process.execPath;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+
+  Object.defineProperty(process, "execPath", {
+    value: "/tmp/loop-checksum-test-binary",
+    configurable: true,
+  });
+
+  const fetchMock = mock((...args: unknown[]) => {
+    const url = String(args[0]);
+    if (url.includes("api.github.com")) {
+      return Promise.resolve(
+        Response.json({
+          tag_name: "v99.0.0",
+          assets: [
+            {
+              name: assetName,
+              browser_download_url: "https://example.com/loop-binary",
+            },
+            {
+              name: `${assetName}.sha256`,
+              browser_download_url: "https://example.com/loop-binary.sha256",
+            },
+          ],
+        })
+      );
+    }
+    if (url.includes(".sha256")) {
+      return Promise.resolve(new Response(`${expectedHash}  ${assetName}\n`));
+    }
+    return Promise.resolve(new Response(binaryData));
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  console.log = mock(() => undefined);
+  console.error = mock(() => undefined);
+
+  try {
+    const { handleManualUpdateCommand } = await import(
+      `../../src/loop/update?checksum=${Date.now()}`
+    );
+    await handleManualUpdateCommand(["update"]);
+
+    expect(existsSync(STAGED_BINARY)).toBe(true);
+    expect(existsSync(METADATA_FILE)).toBe(true);
+  } finally {
+    Object.defineProperty(process, "execPath", {
+      value: originalExecPath,
+      configurable: true,
+    });
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+    if (existsSync(STAGED_BINARY)) {
+      unlinkSync(STAGED_BINARY);
+    }
+    if (existsSync(METADATA_FILE)) {
+      unlinkSync(METADATA_FILE);
+    }
+  }
+});
+
+test("update rejects mismatched checksum", async () => {
+  const osName = process.platform === "darwin" ? "macos" : "linux";
+  const assetName = `loop-${osName}-${process.arch}`;
+
+  const originalExecPath = process.execPath;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+
+  Object.defineProperty(process, "execPath", {
+    value: "/tmp/loop-checksum-test-binary",
+    configurable: true,
+  });
+
+  const fetchMock = mock((...args: unknown[]) => {
+    const url = String(args[0]);
+    if (url.includes("api.github.com")) {
+      return Promise.resolve(
+        Response.json({
+          tag_name: "v99.0.0",
+          assets: [
+            {
+              name: assetName,
+              browser_download_url: "https://example.com/loop-binary",
+            },
+            {
+              name: `${assetName}.sha256`,
+              browser_download_url: "https://example.com/loop-binary.sha256",
+            },
+          ],
+        })
+      );
+    }
+    if (url.includes(".sha256")) {
+      return Promise.resolve(
+        new Response(
+          "0000000000000000000000000000000000000000000000000000000000000000  loop\n"
+        )
+      );
+    }
+    return Promise.resolve(new Response("fake-binary-data"));
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const errorMock = mock(() => undefined);
+  console.log = mock(() => undefined);
+  console.error = errorMock;
+
+  try {
+    const { handleManualUpdateCommand } = await import(
+      `../../src/loop/update?badchecksum=${Date.now()}`
+    );
+    await handleManualUpdateCommand(["update"]);
+
+    const errorCalls = errorMock.mock.calls.map((c) => String(c[0]));
+    expect(errorCalls.some((msg) => msg.includes("Checksum mismatch"))).toBe(
+      true
+    );
+    expect(existsSync(STAGED_BINARY)).toBe(false);
+  } finally {
+    Object.defineProperty(process, "execPath", {
+      value: originalExecPath,
+      configurable: true,
+    });
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+    if (existsSync(STAGED_BINARY)) {
+      unlinkSync(STAGED_BINARY);
+    }
+    if (existsSync(METADATA_FILE)) {
+      unlinkSync(METADATA_FILE);
+    }
+  }
+});
+
+test("update warns when no checksum available", async () => {
+  const osName = process.platform === "darwin" ? "macos" : "linux";
+  const assetName = `loop-${osName}-${process.arch}`;
+
+  const originalExecPath = process.execPath;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+
+  Object.defineProperty(process, "execPath", {
+    value: "/tmp/loop-checksum-test-binary",
+    configurable: true,
+  });
+
+  const fetchMock = mock((...args: unknown[]) => {
+    const url = String(args[0]);
+    if (url.includes("api.github.com")) {
+      return Promise.resolve(
+        Response.json({
+          tag_name: "v99.0.0",
+          assets: [
+            {
+              name: assetName,
+              browser_download_url: "https://example.com/loop-binary",
+            },
+          ],
+        })
+      );
+    }
+    return Promise.resolve(new Response("fake-binary-data"));
+  });
+  globalThis.fetch = fetchMock as typeof fetch;
+
+  const errorMock = mock(() => undefined);
+  console.log = mock(() => undefined);
+  console.error = errorMock;
+
+  try {
+    const { handleManualUpdateCommand } = await import(
+      `../../src/loop/update?nochecksum=${Date.now()}`
+    );
+    await handleManualUpdateCommand(["update"]);
+
+    const errorCalls = errorMock.mock.calls.map((c) => String(c[0]));
+    expect(
+      errorCalls.some((msg) => msg.includes("no .sha256 checksum available"))
+    ).toBe(true);
+    expect(existsSync(STAGED_BINARY)).toBe(true);
+  } finally {
+    Object.defineProperty(process, "execPath", {
+      value: originalExecPath,
+      configurable: true,
+    });
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
     if (existsSync(STAGED_BINARY)) {
       unlinkSync(STAGED_BINARY);
     }

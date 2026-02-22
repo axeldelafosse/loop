@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -19,6 +20,7 @@ const METADATA_FILE = join(CACHE_DIR, "metadata.json");
 const CHECK_FILE = join(CACHE_DIR, "last-check.json");
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const VERSION_PREFIX_RE = /^v/;
+const WHITESPACE_RE = /\s+/;
 
 interface UpdateMetadata {
   downloadedAt: string;
@@ -98,6 +100,34 @@ const saveCheckTime = (): void => {
   );
 };
 
+export const parseReleaseResponse = (data: unknown): ReleaseResponse => {
+  if (typeof data !== "object" || data === null) {
+    throw new Error("Invalid release response: expected an object");
+  }
+  const obj = data as Record<string, unknown>;
+  if (typeof obj.tag_name !== "string") {
+    throw new Error("Invalid release response: missing or invalid tag_name");
+  }
+  if (!Array.isArray(obj.assets)) {
+    throw new Error("Invalid release response: missing or invalid assets");
+  }
+  for (const asset of obj.assets) {
+    if (typeof asset !== "object" || asset === null) {
+      throw new Error("Invalid release response: asset is not an object");
+    }
+    const a = asset as Record<string, unknown>;
+    if (typeof a.name !== "string") {
+      throw new Error("Invalid release response: asset missing name");
+    }
+    if (typeof a.browser_download_url !== "string") {
+      throw new Error(
+        "Invalid release response: asset missing browser_download_url"
+      );
+    }
+  }
+  return data as ReleaseResponse;
+};
+
 const fetchLatestRelease = async (): Promise<ReleaseResponse> => {
   const res = await fetch(API_URL, {
     headers: { Accept: "application/vnd.github+json" },
@@ -105,24 +135,48 @@ const fetchLatestRelease = async (): Promise<ReleaseResponse> => {
   if (!res.ok) {
     throw new Error(`GitHub API returned ${res.status}`);
   }
-  return (await res.json()) as ReleaseResponse;
+  return parseReleaseResponse(await res.json());
+};
+
+const verifyChecksum = async (
+  data: Buffer,
+  checksumUrl: string
+): Promise<void> => {
+  const res = await fetch(checksumUrl);
+  if (!res.ok) {
+    throw new Error(`Checksum download failed: HTTP ${res.status}`);
+  }
+  const expected = (await res.text()).trim().split(WHITESPACE_RE)[0];
+  const actual = createHash("sha256").update(data).digest("hex");
+  if (actual !== expected) {
+    throw new Error(`Checksum mismatch: expected ${expected}, got ${actual}`);
+  }
 };
 
 const downloadAndStage = async (
   url: string,
-  version: string
+  version: string,
+  checksumUrl?: string
 ): Promise<void> => {
   ensureCacheDir();
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Download failed: HTTP ${res.status}`);
   }
-  const buffer = await res.arrayBuffer();
-  if (buffer.byteLength === 0) {
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.byteLength === 0) {
     throw new Error("Downloaded file is empty");
   }
 
-  writeFileSync(STAGED_BINARY, Buffer.from(buffer));
+  if (checksumUrl) {
+    await verifyChecksum(buf, checksumUrl);
+  } else {
+    console.error(
+      "[loop] warning: no .sha256 checksum available, skipping verification"
+    );
+  }
+
+  writeFileSync(STAGED_BINARY, buf);
   chmodSync(STAGED_BINARY, 0o755);
 
   const metadata: UpdateMetadata = {
@@ -163,14 +217,18 @@ export const applyStagedUpdateOnStartup = (): Promise<void> => {
   return Promise.resolve();
 };
 
-const runUpdateFlow = async (): Promise<void> => {
+const checkAndStage = async (
+  assetName: string,
+  silent: boolean
+): Promise<void> => {
   const currentVersion = getCurrentVersion();
-  const assetName = getAssetName();
   const release = await fetchLatestRelease();
   const version = release.tag_name.replace(VERSION_PREFIX_RE, "");
 
   if (!isNewerVersion(version, currentVersion)) {
-    console.log(`[loop] already up to date (v${currentVersion})`);
+    if (!silent) {
+      console.log(`[loop] already up to date (v${currentVersion})`);
+    }
     return;
   }
 
@@ -179,9 +237,22 @@ const runUpdateFlow = async (): Promise<void> => {
     throw new Error(`No release asset for ${assetName}`);
   }
 
-  console.log(`[loop] downloading v${version}...`);
-  await downloadAndStage(asset.browser_download_url, version);
-  console.log(`[loop] v${version} staged — will apply on next startup`);
+  if (!silent) {
+    console.log(`[loop] downloading v${version}...`);
+  }
+
+  const checksumAsset = release.assets.find(
+    (a) => a.name === `${assetName}.sha256`
+  );
+  await downloadAndStage(
+    asset.browser_download_url,
+    version,
+    checksumAsset?.browser_download_url
+  );
+
+  if (!silent) {
+    console.log(`[loop] v${version} staged — will apply on next startup`);
+  }
 };
 
 export const handleManualUpdateCommand = async (
@@ -198,7 +269,7 @@ export const handleManualUpdateCommand = async (
   }
 
   try {
-    await runUpdateFlow();
+    await checkAndStage(getAssetName(), false);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`[loop] update failed: ${msg}`);
@@ -214,8 +285,6 @@ export const startAutoUpdateCheck = (): void => {
     return;
   }
 
-  // Validate platform and persist check time synchronously.
-  // These are local/actionable errors — report them to the user.
   let assetName: string;
   try {
     assetName = getAssetName();
@@ -226,24 +295,7 @@ export const startAutoUpdateCheck = (): void => {
     return;
   }
 
-  (async () => {
-    try {
-      const currentVersion = getCurrentVersion();
-      const release = await fetchLatestRelease();
-      const version = release.tag_name.replace(VERSION_PREFIX_RE, "");
-
-      if (!isNewerVersion(version, currentVersion)) {
-        return;
-      }
-
-      const asset = release.assets.find((a) => a.name === assetName);
-      if (!asset) {
-        return;
-      }
-
-      await downloadAndStage(asset.browser_download_url, version);
-    } catch {
-      // Network and download failures are best-effort in auto mode
-    }
-  })();
+  checkAndStage(assetName, true).catch(() => {
+    // Network/download failures are best-effort in auto mode
+  });
 };
