@@ -71,6 +71,67 @@ const TRAILING_CR_RE = /\r$/;
 const TRAILING_LINE_BREAKS_RE = /[\r\n]+$/g;
 const LOOP_SESSION_RE = /-loop-(\d+)$/;
 
+const isNodeOrBunToken = (token: string): boolean =>
+  token === "node" ||
+  token === "bun" ||
+  token.endsWith("/node") ||
+  token.endsWith("/bun");
+
+const isCodexBinaryToken = (token: string): boolean =>
+  token === "codex" ||
+  token.includes("codex@") ||
+  token.endsWith("/codex") ||
+  token.endsWith("/bin/codex") ||
+  token.endsWith("/codex.js") ||
+  token.endsWith("/codex.mjs") ||
+  token.endsWith("/codex-app-server") ||
+  token.endsWith("/codex-app-server.js") ||
+  token.includes("/openai/codex/") ||
+  token.includes("/node_modules/@openai/codex") ||
+  token.includes("/@openai/codex");
+
+const isCodexAppServerToken = (token: string): boolean =>
+  token === "app-server" ||
+  token.includes("app-server/") ||
+  token.endsWith("/app-server") ||
+  token.endsWith("/app-server.js") ||
+  token.endsWith("/app-server.mjs") ||
+  token.includes("/codex-app-server");
+
+const tokenizeCommand = (command: string): string[] =>
+  command.split(TOKEN_RE).filter(Boolean);
+
+const commandBinaryTokens = (tokens: string[]): string[] => {
+  const first = tokens[0] ?? "";
+  if (!isNodeOrBunToken(first)) {
+    return [first];
+  }
+
+  return [first, ...tokens.slice(1).filter((token) => !token.startsWith("-"))];
+};
+
+const isCodexAppServerProcess = (tokens: string[]): boolean => {
+  const binaryTokens = commandBinaryTokens(tokens);
+  const hasAppServer = tokens.some(isCodexAppServerToken);
+  const hasCodexBinary =
+    binaryTokens.some(isCodexBinaryToken) ||
+    binaryTokens.some(isCodexAppServerToken);
+  return hasAppServer && hasCodexBinary;
+};
+
+const isCodexAppServerWrapper = (tokens: string[]): boolean => {
+  const appServerIndex = tokens.findIndex(isCodexAppServerToken);
+  if (appServerIndex <= 0) {
+    return false;
+  }
+  return tokens
+    .slice(0, appServerIndex)
+    .some((token) => isCodexBinaryToken(token) || isNodeOrBunToken(token));
+};
+
+const isCodexEngine = (command: string, tokens: string[]): boolean =>
+  command.includes("/codex/codex") || isCodexAppServerProcess(tokens);
+
 const sleep = async (ms: number): Promise<void> =>
   await new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -108,30 +169,37 @@ const parseProcessList = (text: string): AgentProcess[] => {
 
   const codexEngineParents = new Set<number>();
   for (const row of rows) {
-    if (row.command.includes("/codex/codex")) {
+    if (isCodexEngine(row.command, tokenizeCommand(row.command))) {
       codexEngineParents.add(row.ppid);
     }
   }
 
   const processes: AgentProcess[] = [];
+  const codexEngineParentPids = new Set<number>();
+
+  for (const row of rows) {
+    const tokens = tokenizeCommand(row.command);
+    if (isCodexEngine(row.command, tokens)) {
+      codexEngineParentPids.add(row.ppid);
+    }
+  }
+
   for (const row of rows) {
     const command = row.command.trim();
-    const firstToken = command.split(TOKEN_RE)[0] ?? "";
+    const tokens = tokenizeCommand(command);
+    const firstToken = tokens[0] ?? "";
     const isClaude = firstToken === "claude" || firstToken.endsWith("/claude");
-    const isCodexEngine = command.includes("/codex/codex");
-    const isCodexWrapper =
-      command.includes("/bin/codex") ||
-      firstToken === "codex" ||
-      firstToken.endsWith("/codex");
+    const isCodex = isCodexEngine(command, tokens);
+    const isCodexWrapper = isCodexAppServerWrapper(tokens);
+
+    if (isCodexWrapper && codexEngineParentPids.has(row.pid)) {
+      continue;
+    }
     if (isClaude) {
       processes.push({ agent: "claude", pid: row.pid });
       continue;
     }
-    if (isCodexEngine) {
-      processes.push({ agent: "codex", pid: row.pid });
-      continue;
-    }
-    if (isCodexWrapper && !codexEngineParents.has(row.pid)) {
+    if (isCodex) {
       processes.push({ agent: "codex", pid: row.pid });
     }
   }
@@ -747,12 +815,21 @@ const parseCodexHistoryRow = (path: string): DoneRow | undefined => {
     return undefined;
   }
   const first = parseObject(readFirstLine(path));
-  const payload =
+  const firstPayload =
     typeof first?.payload === "object" && first.payload !== null
       ? (first.payload as Record<string, unknown>)
       : undefined;
-  const session = str(payload, "id") || basename(path, ".jsonl");
-  const cwd = str(payload, "cwd") || "-";
+  const payload =
+    typeof firstPayload === "object" && firstPayload !== null
+      ? firstPayload
+      : undefined;
+  const session =
+    str(payload, "id") ||
+    str(first, "id") ||
+    str(first, "session") ||
+    str(first, "sessionId") ||
+    basename(path, ".jsonl");
+  const cwd = str(payload, "cwd") || str(first, "cwd") || "-";
 
   const last = parseObject(readLastLine(path));
   const iso = str(last, "timestamp");
@@ -761,7 +838,7 @@ const parseCodexHistoryRow = (path: string): DoneRow | undefined => {
       ? (last.payload as Record<string, unknown>)
       : undefined;
   const payloadType = str(lastPayload, "type");
-  const eventBase = str(last, "type") || "unknown";
+  const eventBase = str(last, "type") || str(lastPayload, "type") || "unknown";
   const event = payloadType ? `${eventBase}/${payloadType}` : eventBase;
   const endedAtMs = Number.isFinite(parseTimestampMs(iso))
     ? parseTimestampMs(iso)
@@ -1101,4 +1178,5 @@ export const panelInternals = {
   projectKeyFromCwd,
   reconcileDoneRows,
   rowId,
+  parseCodexHistoryRow,
 };
