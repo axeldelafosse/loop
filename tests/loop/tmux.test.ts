@@ -146,6 +146,7 @@ test("runInTmux skips auto-attach for non-interactive sessions", () => {
 test("runInTmux reports when tmux session exits before attach", () => {
   expect(() =>
     runInTmux(["--tmux", "--proof", "verify"], {
+      cwd: "/loop",
       env: {},
       findBinary: () => true,
       spawn: (args: string[]) => {

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>loop</title>
+    <style>
+    * {
+      box-sizing: border-box;
+      padding: 0;
+      margin: 0;
+    }
+
+    body {
+      max-width: 640px;
+      padding: 2rem 1.5rem;
+      margin: 0 auto;
+      font-family:
+        ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas,
+        "DejaVu Sans Mono", monospace;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #c8c8c8;
+      background: #0a0a0a;
+    }
+
+    a {
+      color: #6cb6ff;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 3rem;
+    }
+
+    header .name {
+      font-size: 1rem;
+      color: #e0e0e0;
+    }
+
+    h1 {
+      margin-bottom: 0.5rem;
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    .tagline {
+      margin-bottom: 2.5rem;
+      color: #888;
+    }
+
+    pre {
+      padding: 1rem 1.2rem;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: #e0e0e0;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+    }
+
+    h2 {
+      margin-bottom: 0.8rem;
+      font-size: 0.9rem;
+      font-weight: 400;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    section {
+      margin-bottom: 2.5rem;
+    }
+
+    .install {
+      position: relative;
+      margin-bottom: 2.5rem;
+    }
+
+    .install button {
+      position: absolute;
+      top: 0.6rem;
+      right: 0.6rem;
+      padding: 0.25rem 0.5rem;
+      font-family: inherit;
+      font-size: 0.75rem;
+      color: #888;
+      cursor: pointer;
+      background: #1e1e1e;
+      border: 1px solid #333;
+    }
+
+    .install button:hover {
+      color: #c8c8c8;
+      border-color: #555;
+    }
+
+    ul {
+      padding: 0;
+      list-style: none;
+    }
+
+    ul li::before {
+      color: #555;
+      content: "- ";
+    }
+
+    ul li {
+      margin-bottom: 0.3rem;
+    }
+
+    .what-it-is p {
+      margin-bottom: 1rem;
+      color: #999;
+    }
+
+    .what-it-is em {
+      font-style: normal;
+      color: #c8c8c8;
+    }
+
+    footer {
+      padding-top: 1.5rem;
+      margin-top: 3rem;
+      font-size: 0.8rem;
+      color: #555;
+      border-top: 1px solid #1a1a1a;
+    }
+
+    footer a {
+      color: #555;
+    }
+    footer a:hover {
+      color: #888;
+    }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="name">loop</span>
+      <a href="https://github.com/axeldelafosse/loop">github</a>
+    </header>
+
+    <h1>Dead simple CLI that runs codex and claude in a loop.</h1>
+    <p class="tagline">The main loop is ~50 lines of code.</p>
+
+    <section class="install">
+      <h2>Install</h2>
+      <pre
+      ><code>curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash</code></pre>
+      <button type="button" id="copy-btn">copy</button>
+    </section>
+
+    <section>
+      <h2>Usage</h2>
+      <pre
+      ><code>loop --prompt "Implement auth flow" --proof "All tests pass" --worktree
+
+loop --prompt "Fix the payment bug" --proof "Run bun test" --review claudex</code></pre>
+    </section>
+
+    <section>
+      <h2>What it does</h2>
+      <ul>
+        <li>Runs codex or claude with a PLAN.md and proof criteria</li>
+        <li>Loops until the agent proves the task is done</li>
+        <li>Runs dual review (codex + claude) before exiting</li>
+        <li>Addresses review comments automatically</li>
+        <li>Creates a draft PR</li>
+      </ul>
+    </section>
+
+    <section class="what-it-is">
+      <h2>What this is</h2>
+      <p>
+        This <em>is</em> a "meta agent loop" to help coding agents become
+        long-running agents. Stop baby sitting your agents: let them iterate on
+        tasks with clear proof requirements until they are done.
+      </p>
+      <p>
+        This <em>is not</em> an "agent harness" and the goal isn't to re-invent
+        the wheel. Loop leverages existing agent harnesses like codex and
+        claude, with their own implementation of the "agent teams"
+        orchestration.
+      </p>
+    </section>
+
+    <footer>
+      <a href="https://github.com/axeldelafosse/loop">github</a>
+      &middot; MIT
+    </footer>
+
+    <script>
+    "use strict";
+    const btn = document.getElementById("copy-btn");
+    btn.addEventListener("click", () => {
+      navigator.clipboard.writeText(
+        "curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash"
+      );
+      btn.textContent = "copied";
+      setTimeout(() => (btn.textContent = "copy"), 1500);
+    });
+    </script>
+  </body>
+</html>
