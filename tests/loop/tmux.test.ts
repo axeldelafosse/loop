@@ -24,6 +24,7 @@ test("runInTmux returns false when already inside tmux", () => {
 test("runInTmux throws install message when tmux is missing", () => {
   expect(() =>
     runInTmux(["--tmux", "--proof", "verify"], {
+      env: {},
       findBinary: () => false,
     })
   ).toThrow(TMUX_MISSING_ERROR);

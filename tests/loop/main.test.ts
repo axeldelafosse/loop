@@ -39,6 +39,12 @@ const loadRunLoop = async (mocks: {
   runDraftPrStep?: () => Promise<undefined>;
   runReview?: () => Promise<ReviewResult>;
 }) => {
+  mock.module("node:readline/promises", () => ({
+    createInterface: mock(() => ({
+      close: mock(() => undefined),
+      question: mock(async () => ""),
+    })),
+  }));
   mock.module("../../src/loop/prompts", () => ({
     buildWorkPrompt: mock(mocks.buildWorkPrompt ?? (() => "prompt")),
   }));

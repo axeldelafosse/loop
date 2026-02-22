@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { buildLoopName, runGit, sanitizeBase } from "./git";
 import type { Options } from "./types";
@@ -14,6 +14,7 @@ interface WorktreeDeps {
   cwd: () => string;
   env: NodeJS.ProcessEnv;
   log: (line: string) => void;
+  moveFile: (source: string, target: string) => void;
   pathExists: (path: string) => boolean;
   runGit: (args: string[]) => GitResult;
   syncTree: (source: string, target: string) => void;
@@ -22,9 +23,11 @@ interface WorktreeDeps {
 const MAX_WORKTREE_ATTEMPTS = 10_000;
 const RUN_BASE_ENV = "LOOP_RUN_BASE";
 const RUN_ID_ENV = "LOOP_RUN_ID";
+const PLAN_FILE = "PLAN.md";
 const WORKTREE_CONFLICT_RE = /already exists|already checked out|not locked/i;
 const STALE_WORKTREE_RE =
   /missing but already registered worktree|already registered worktree/i;
+const WORKTREE_GIT_DIR_MARKER = ".git/worktrees/";
 
 const isInside = (root: string, path: string): boolean => {
   const rel = relative(root, path);
@@ -103,6 +106,10 @@ const defaultDeps = (): WorktreeDeps => ({
     console.log(line);
   },
   pathExists: (path: string) => existsSync(path),
+  moveFile: (source: string, target: string) => {
+    cpSync(source, target, { force: true });
+    rmSync(source, { force: true });
+  },
   runGit: (args: string[]) => {
     try {
       return runGit(process.cwd(), args);
@@ -156,6 +163,24 @@ export const maybeEnterWorktree = (
 
   const deps = { ...defaultDeps(), ...overrides };
   const currentCwd = deps.cwd();
+  const superProject = deps.runGit([
+    "rev-parse",
+    "--show-superproject-working-tree",
+  ]);
+  if (superProject.exitCode === 0 && superProject.stdout.trim()) {
+    deps.log(
+      "[loop] already running inside a git worktree, skipping --worktree setup"
+    );
+    return;
+  }
+  const gitDir = deps.runGit(["rev-parse", "--git-dir"]).stdout.trim();
+  if (gitDir.replaceAll("\\", "/").includes(WORKTREE_GIT_DIR_MARKER)) {
+    deps.log(
+      "[loop] already running inside a git worktree, skipping --worktree setup"
+    );
+    return;
+  }
+
   const repoRoot = gitOutput(
     deps,
     ["rev-parse", "--show-toplevel"],
@@ -171,9 +196,6 @@ export const maybeEnterWorktree = (
   ): { branch: string; worktreePath: string } | undefined => {
     const candidateBranch = buildWorktreeBranch(runBase, index);
     const candidatePath = buildWorktreePath(repoRoot, runBase, index);
-    if (deps.pathExists(candidatePath)) {
-      return undefined;
-    }
 
     const branchExists =
       deps.runGit([
@@ -244,6 +266,10 @@ export const maybeEnterWorktree = (
     worktreePath,
     deps.pathExists
   );
+  const sourcePlanPath = join(currentCwd, PLAN_FILE);
+  if (deps.pathExists(sourcePlanPath)) {
+    deps.moveFile(sourcePlanPath, join(worktreeCwd, PLAN_FILE));
+  }
   deps.chdir(worktreeCwd);
   deps.log(`[loop] created worktree "${worktreePath}"`);
   deps.log(`[loop] switched to branch "${branch}"`);
