@@ -108,6 +108,20 @@ git push origin main
 git push --tags
 ```
 
+## Auto-update
+
+Prebuilt binaries check for updates automatically on startup and download new versions in the background. The update is applied on the next startup.
+
+```bash
+# manually check for updates
+loop update
+
+# same thing (alias)
+loop upgrade
+```
+
+When running from source (`bun src/loop.ts`), auto-update is disabled — use `git pull` instead.
+
 ## Options
 
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)

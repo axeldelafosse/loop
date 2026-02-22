@@ -10,6 +10,8 @@ loop - meta agent loop runner
 Usage:
   loop                              Open live panel for running claude/codex instances
   loop [options] [prompt]
+  loop update                       Check for updates and stage if available
+  loop upgrade                      Alias for update
 
 Options:
   -a, --agent <claude|codex>        Agent CLI to run (default: codex)
@@ -22,6 +24,10 @@ Options:
   --tmux                            Run in a detached tmux session (name: repo-loop-X)
   --worktree                        Create and run in a fresh git worktree (name: repo-loop-X)
   -h, --help                        Show this help
+
+Auto-update:
+  Updates are checked automatically on startup and applied on the next run.
+  Use "loop update" to manually check and stage an update.
 `.trim();
 
 export const REVIEW_PASS = "<review>PASS</review>";

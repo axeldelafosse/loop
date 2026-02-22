@@ -1,9 +1,16 @@
 #!/usr/bin/env bun
 import { cliDeps } from "./loop/deps";
+import { updateDeps } from "./loop/update-deps";
 
 const TMUX_DETACH_HINT = "[loop] detach with Ctrl-b d";
 
 export const runCli = async (argv: string[]): Promise<void> => {
+  await updateDeps.applyStagedUpdateOnStartup();
+  if (await updateDeps.handleManualUpdateCommand(argv)) {
+    return;
+  }
+  updateDeps.startAutoUpdateCheck();
+
   if (process.env.TMUX) {
     console.log(TMUX_DETACH_HINT);
   }

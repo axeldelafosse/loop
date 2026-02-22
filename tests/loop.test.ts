@@ -26,7 +26,16 @@ interface CliModuleDeps {
   runPanel?: () => Promise<void>;
 }
 
-const loadRunCli = async (deps: CliModuleDeps = {}) => {
+interface UpdateModuleDeps {
+  applyStagedUpdateOnStartup?: () => Promise<void>;
+  handleManualUpdateCommand?: (argv: string[]) => Promise<boolean>;
+  startAutoUpdateCheck?: () => void;
+}
+
+const loadRunCli = async (
+  deps: CliModuleDeps = {},
+  updateOverrides: UpdateModuleDeps = {}
+) => {
   const maybeEnterWorktreeMock = mock(
     deps.maybeEnterWorktree ?? (() => undefined)
   );
@@ -35,6 +44,16 @@ const loadRunCli = async (deps: CliModuleDeps = {}) => {
   const runInTmuxMock = mock(deps.runInTmux ?? (() => false));
   const runLoopMock = mock(deps.runLoop ?? (async () => undefined));
   const runPanelMock = mock(deps.runPanel ?? (async () => undefined));
+
+  const applyStagedMock = mock(
+    updateOverrides.applyStagedUpdateOnStartup ?? (async () => undefined)
+  );
+  const handleManualMock = mock(
+    updateOverrides.handleManualUpdateCommand ?? (async () => false)
+  );
+  const startAutoCheckMock = mock(
+    updateOverrides.startAutoUpdateCheck ?? (() => undefined)
+  );
 
   mock.module("../src/loop/deps", () => ({
     cliDeps: {
@@ -47,8 +66,18 @@ const loadRunCli = async (deps: CliModuleDeps = {}) => {
     },
   }));
 
+  mock.module("../src/loop/update-deps", () => ({
+    updateDeps: {
+      applyStagedUpdateOnStartup: applyStagedMock,
+      handleManualUpdateCommand: handleManualMock,
+      startAutoUpdateCheck: startAutoCheckMock,
+    },
+  }));
+
   const { runCli } = await import(`../src/loop?test=${Date.now()}`);
   return {
+    applyStagedMock,
+    handleManualMock,
     maybeEnterWorktreeMock,
     parseArgsMock,
     resolveTaskMock,
@@ -56,6 +85,7 @@ const loadRunCli = async (deps: CliModuleDeps = {}) => {
     runInTmuxMock,
     runLoopMock,
     runPanelMock,
+    startAutoCheckMock,
   };
 };
 
@@ -227,4 +257,58 @@ test("runCli creates worktree before resolving task when --worktree is set", asy
   expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
   expect(calls).toEqual(["worktree", "resolve"]);
   expect(runLoopMock).toHaveBeenCalledWith("ship feature", opts);
+});
+
+test("runCli calls update hooks in correct order before task flow", async () => {
+  const calls: string[] = [];
+  const opts = makeOptions();
+  const { runCli, applyStagedMock, handleManualMock, startAutoCheckMock } =
+    await loadRunCli(
+      {
+        parseArgs: () => opts,
+        resolveTask: () => {
+          calls.push("resolveTask");
+          return Promise.resolve("ship feature");
+        },
+      },
+      {
+        applyStagedUpdateOnStartup: () => {
+          calls.push("applyStaged");
+          return Promise.resolve();
+        },
+        handleManualUpdateCommand: () => {
+          calls.push("handleManual");
+          return Promise.resolve(false);
+        },
+        startAutoUpdateCheck: () => {
+          calls.push("autoCheck");
+        },
+      }
+    );
+
+  await runCli(["--proof", "verify with tests"]);
+
+  expect(applyStagedMock).toHaveBeenCalledTimes(1);
+  expect(handleManualMock).toHaveBeenCalledTimes(1);
+  expect(startAutoCheckMock).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual([
+    "applyStaged",
+    "handleManual",
+    "autoCheck",
+    "resolveTask",
+  ]);
+});
+
+test("runCli returns early when handleManualUpdateCommand returns true", async () => {
+  const { runCli, runLoopMock, runPanelMock } = await loadRunCli(
+    {},
+    {
+      handleManualUpdateCommand: () => Promise.resolve(true),
+    }
+  );
+
+  await runCli(["update"]);
+
+  expect(runLoopMock).not.toHaveBeenCalled();
+  expect(runPanelMock).not.toHaveBeenCalled();
 });
