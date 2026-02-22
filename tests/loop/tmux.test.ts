@@ -34,6 +34,8 @@ test("runInTmux starts detached session and strips --tmux", () => {
   const calls: string[][] = [];
   const attaches: string[] = [];
   const logs: string[] = [];
+  const command =
+    "'env' 'LOOP_RUN_BASE=repo' 'LOOP_RUN_ID=1' 'bun' '/repo/src/loop.ts' '--proof' 'verify' 'fix bug'";
 
   const delegated = runInTmux(["--tmux", "--proof", "verify", "fix bug"], {
     attach: (session: string) => {
@@ -62,13 +64,8 @@ test("runInTmux starts detached session and strips --tmux", () => {
     "repo-loop-1",
     "-c",
     "/repo",
-    expect.stringContaining("env"),
+    command,
   ]);
-  expect(calls[0]?.[7]).toContain("env");
-  expect(calls[0]?.[7]).toContain("LOOP_RUN_BASE=repo");
-  expect(calls[0]?.[7]).toContain("LOOP_RUN_ID=1");
-  expect(calls[0]?.[7]).toContain("bun");
-  expect(calls[0]?.[7]).toContain("/repo/src/loop.ts");
   expect(calls[1]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
   expect(calls[2]).toEqual([
     "tmux",
