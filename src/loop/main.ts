@@ -3,15 +3,19 @@ import { runDraftPrStep } from "./pr";
 import { buildWorkPrompt } from "./prompts";
 import { resolveReviewers, runReview } from "./review";
 import { runAgent } from "./runner";
-import { hasSignal } from "./utils";
 import type { Options } from "./types";
+import { hasSignal } from "./utils";
 
-const doneSignalText = (doneSignal: string): string =>
-  `done signal "${doneSignal}"`;
-const doneSignalMissingText = (signal: string): string =>
+const doneSignalText = (doneSignal: string) => `done signal "${doneSignal}"`;
+const doneSignalMissingText = (signal: string) =>
   `\n[loop] ${doneSignalText(signal)} detected, stopping.`;
-const doneSignalPassedText = (signal: string): string =>
+const doneSignalPassedText = (signal: string) =>
   `\n[loop] ${doneSignalText(signal)} detected and review passed, stopping.`;
+const doneSignalExitText = (doneSignal: string, exitCode: number) =>
+  `[loop] ${doneSignalText(doneSignal)} seen despite exit code ${exitCode}.`;
+const bothReviewersNotes = (notes: string): string =>
+  "Both reviewers requested changes. Decide for each comment whether to address it now. " +
+  `If you skip one, explain why briefly. If both reviews found the same issue, it might be worth addressing.\n\n${notes}`;
 
 const runIterations = async (
   task: string,
@@ -21,28 +25,36 @@ const runIterations = async (
 ): Promise<boolean> => {
   let reviewNotes = "";
   const shouldReview = reviewers.length > 0;
+  const doneSignal = opts.doneSignal;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
   for (let i = 1; i <= opts.maxIterations; i++) {
-    const tag = Number.isFinite(opts.maxIterations) ? `/${opts.maxIterations}` : "";
+    const tag = Number.isFinite(opts.maxIterations)
+      ? `/${opts.maxIterations}`
+      : "";
     console.log(`\n[loop] iteration ${i}${tag}`);
-    const prompt = buildWorkPrompt(task, opts.doneSignal, opts.proof, reviewNotes);
+    const prompt = buildWorkPrompt(
+      task,
+      opts.doneSignal,
+      opts.proof,
+      reviewNotes
+    );
     reviewNotes = "";
     const result = await runAgent(opts.agent, prompt, opts);
     const output = `${result.parsed}\n${result.combined}`;
-    const done = hasSignal(output, opts.doneSignal);
+    const done = hasSignal(output, doneSignal);
     if (!done && result.exitCode !== 0) {
-      throw new Error(`[loop] ${opts.agent} exited with code ${result.exitCode}`);
+      throw new Error(
+        `[loop] ${opts.agent} exited with code ${result.exitCode}`
+      );
     }
     if (!done) {
       continue;
     }
     if (result.exitCode !== 0) {
-      console.log(
-        `[loop] ${doneSignalText(opts.doneSignal)} seen despite exit code ${result.exitCode}.`
-      );
+      console.log(doneSignalExitText(doneSignal, result.exitCode));
     }
     if (!shouldReview) {
-      console.log(doneSignalMissingText(opts.doneSignal));
+      console.log(doneSignalMissingText(doneSignal));
       return true;
     }
     const review = await runReview(reviewers, task, opts);
@@ -52,10 +64,10 @@ const runIterations = async (
       return true;
     }
     if (review.consensusFail) {
-      reviewNotes =
-        `Both reviewers requested changes. Decide for each comment whether to address it now. ` +
-        `If you skip one, explain why briefly. If both reviews found the same issue, it might be worth addressing.\n\n${review.notes}`;
-      console.log("\n[loop] both reviews collected. original agent deciding what to address.");
+      reviewNotes = bothReviewersNotes(review.notes);
+      console.log(
+        "\n[loop] both reviews collected. original agent deciding what to address."
+      );
       continue;
     }
     reviewNotes = review.notes || "Reviewer found more work to do.";
@@ -71,27 +83,31 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;
   let hasExistingPr = false;
-  let currentTask = task;
+  let loopTask = task;
   while (true) {
-    const done = await runIterations(currentTask, opts, reviewers, hasExistingPr);
+    const done = await runIterations(loopTask, opts, reviewers, hasExistingPr);
     if (reviewers.length > 0 && done) {
       hasExistingPr = true;
     }
     if (!rl) {
       if (!done) {
-        console.log(`\n[loop] reached max iterations (${opts.maxIterations}), stopping.`);
+        console.log(
+          `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
+        );
       }
       return;
     }
     if (!done) {
       console.log(`\n[loop] reached max iterations (${opts.maxIterations}).`);
     }
-    const answer = await rl.question("\n[loop] follow-up prompt (blank to exit): ");
+    const answer = await rl.question(
+      "\n[loop] follow-up prompt (blank to exit): "
+    );
     const followUp = answer.trim() || null;
     if (!followUp) {
       rl.close();
       return;
     }
-    currentTask = `${currentTask}\n\nFollow-up:\n${followUp}`;
+    loopTask = `${loopTask}\n\nFollow-up:\n${followUp}`;
   }
 };

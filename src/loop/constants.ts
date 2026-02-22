@@ -20,7 +20,6 @@ Options:
   -p, --prompt <text|.md file>      Prompt text or path to a .md prompt file
   -m, --max-iterations <number>.    Max loops (default: infinite)
   -d, --done <signal>               Done signal (default: <promise>DONE</promise>)
-      CODEX_TRANSPORT=app-server|exec  Codex transport mode (default: app-server)
   --proof <text>                    Proof requirements for task completion (required)
   --codex-model <model>             Override codex model (default: ${DEFAULT_CODEX_MODEL})
   --format <pretty|raw>             Log format (default: pretty)

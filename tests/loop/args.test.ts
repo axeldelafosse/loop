@@ -90,7 +90,12 @@ test("parseArgs uses LOOP_CODEX_MODEL when present", () => {
 });
 
 test("parseArgs uses --codex-model when provided", () => {
-  const opts = parseArgs(["--codex-model", "custom-model", "--proof", "verify"]);
+  const opts = parseArgs([
+    "--codex-model",
+    "custom-model",
+    "--proof",
+    "verify",
+  ]);
 
   expect(opts.model).toBe("custom-model");
 });

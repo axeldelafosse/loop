@@ -125,11 +125,7 @@ const consumeArg = (
   }
 
   if (arg.startsWith("--codex-model=")) {
-    applyValueFlag(
-      "codexModel",
-      arg.slice("--codex-model=".length),
-      opts
-    );
+    applyValueFlag("codexModel", arg.slice("--codex-model=".length), opts);
     return { nextIndex: index + 1, stop: false };
   }
 
