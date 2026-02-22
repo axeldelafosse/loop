@@ -7,6 +7,7 @@ export type ValueFlag =
   | "max"
   | "done"
   | "proof"
+  | "codexModel"
   | "format";
 
 export interface Options {

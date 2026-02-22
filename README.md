@@ -127,6 +127,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)
 - `-p, --prompt <text|.md file>`: prompt text or a `.md` prompt file path. Plain text auto-creates `PLAN.md` first.
 - `--proof <text>`: required proof criteria for task completion
+- `--codex-model <model>`: set the model passed to codex (`LOOP_CODEX_MODEL` can also set this by default)
 - `-m, --max-iterations <number>`: max loop count (default: infinite)
 - `-d, --done <signal>`: done signal string (default: `<promise>DONE</promise>`)
 - `--format <pretty|raw>`: output format (default: `pretty`)

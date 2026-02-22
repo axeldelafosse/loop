@@ -89,6 +89,19 @@ test("parseArgs uses LOOP_CODEX_MODEL when present", () => {
   expect(opts.model).toBe("test-model");
 });
 
+test("parseArgs uses --codex-model when provided", () => {
+  const opts = parseArgs(["--codex-model", "custom-model", "--proof", "verify"]);
+
+  expect(opts.model).toBe("custom-model");
+});
+
+test("parseArgs with --codex-model= overrides LOOP_CODEX_MODEL", () => {
+  process.env.LOOP_CODEX_MODEL = "env-model";
+  const opts = parseArgs(["--codex-model=flag-model", "--proof", "verify"]);
+
+  expect(opts.model).toBe("flag-model");
+});
+
 test("parseArgs handles all value flags and explicit reviewer", () => {
   const opts = parseArgs([
     "--agent",
@@ -104,6 +117,8 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
     "--format",
     "pretty",
     "--review=claudex",
+    "--codex-model",
+    "custom-model",
   ]);
 
   expect(opts.agent).toBe("claude");
@@ -113,6 +128,7 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
   expect(opts.proof).toBe("verify this");
   expect(opts.format).toBe("pretty");
   expect(opts.review).toBe("claudex");
+  expect(opts.model).toBe("custom-model");
 });
 
 test("parseArgs treats bare --review as claudex when no reviewer follows", () => {

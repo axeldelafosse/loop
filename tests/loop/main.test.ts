@@ -89,6 +89,19 @@ test("runLoop stops immediately on done signal when review is disabled", async (
   expect(runDraftPrStep).not.toHaveBeenCalled();
 });
 
+test("runLoop stops on done signal even if agent exits non-zero when review is disabled", async () => {
+  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+    resolveReviewers: () => [],
+    runAgent: async () => makeRunResult("<done/>", "", 1),
+  });
+
+  await runLoop("Ship feature", makeOptions({ review: undefined }));
+
+  expect(runAgent).toHaveBeenCalledTimes(1);
+  expect(runReview).not.toHaveBeenCalled();
+  expect(runDraftPrStep).not.toHaveBeenCalled();
+});
+
 test("runLoop creates draft PR when done signal is reviewed and approved", async () => {
   const opts = makeOptions({ review: "claudex" });
   const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
@@ -105,6 +118,31 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
 
   expect(runAgent).toHaveBeenCalledTimes(1);
   expect(runReview).toHaveBeenCalledTimes(1);
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(
+    1,
+    "Ship feature",
+    opts,
+    false
+  );
+});
+
+test("runLoop creates draft PR when done signal is reviewed and approved even if agent exits non-zero", async () => {
+  const opts = makeOptions({ review: "claudex" });
+  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+    resolveReviewers: () => ["codex", "claude"],
+    runAgent: async () => makeRunResult("<done/>", "", 1),
+    runReview: async () => ({
+      approved: true,
+      consensusFail: false,
+      notes: "",
+    }),
+  });
+
+  await runLoop("Ship feature", opts);
+
+  expect(runAgent).toHaveBeenCalledTimes(1);
+  expect(runReview).toHaveBeenCalledTimes(1);
+  expect(runDraftPrStep).toHaveBeenCalledTimes(1);
   expect(runDraftPrStep).toHaveBeenNthCalledWith(
     1,
     "Ship feature",

@@ -21,6 +21,7 @@ Options:
   -m, --max-iterations <number>.    Max loops (default: infinite)
   -d, --done <signal>               Done signal (default: <promise>DONE</promise>)
   --proof <text>                    Proof requirements for task completion (required)
+  --codex-model <model>             Override codex model (default: ${DEFAULT_CODEX_MODEL})
   --format <pretty|raw>             Log format (default: pretty)
   --review [claude|codex|claudex]   Review on done (default: claudex)
   --tmux                            Run in a detached tmux session (name: repo-loop-X)
@@ -47,5 +48,6 @@ export const VALUE_FLAGS: Record<string, ValueFlag> = {
   "-d": "done",
   "--done": "done",
   "--proof": "proof",
+  "--codex-model": "codexModel",
   "--format": "format",
 };
