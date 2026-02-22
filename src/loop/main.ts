@@ -6,6 +6,17 @@ import { runAgent } from "./runner";
 import type { Options } from "./types";
 import { hasSignal } from "./utils";
 
+const doneSignalText = (doneSignal: string) => `done signal "${doneSignal}"`;
+const doneSignalMissingText = (signal: string) =>
+  `\n[loop] ${doneSignalText(signal)} detected, stopping.`;
+const doneSignalPassedText = (signal: string) =>
+  `\n[loop] ${doneSignalText(signal)} detected and review passed, stopping.`;
+const doneSignalExitText = (doneSignal: string, exitCode: number) =>
+  `[loop] ${doneSignalText(doneSignal)} seen despite exit code ${exitCode}.`;
+const bothReviewersNotes = (notes: string): string =>
+  "Both reviewers requested changes. Decide for each comment whether to address it now. " +
+  `If you skip one, explain why briefly. If both reviews found the same issue, it might be worth addressing.\n\n${notes}`;
+
 const runIterations = async (
   task: string,
   opts: Options,
@@ -13,7 +24,8 @@ const runIterations = async (
   hasExistingPr = false
 ): Promise<boolean> => {
   let reviewNotes = "";
-  const stopMessage = `\n[loop] done signal "${opts.doneSignal}" detected`;
+  const shouldReview = reviewers.length > 0;
+  const doneSignal = opts.doneSignal;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
   for (let i = 1; i <= opts.maxIterations; i++) {
     const tag = Number.isFinite(opts.maxIterations)
@@ -28,28 +40,31 @@ const runIterations = async (
     );
     reviewNotes = "";
     const result = await runAgent(opts.agent, prompt, opts);
-    if (result.exitCode !== 0) {
+    const output = `${result.parsed}\n${result.combined}`;
+    const done = hasSignal(output, doneSignal);
+    if (!done && result.exitCode !== 0) {
       throw new Error(
         `[loop] ${opts.agent} exited with code ${result.exitCode}`
       );
     }
-    if (!hasSignal(`${result.parsed}\n${result.combined}`, opts.doneSignal)) {
+    if (!done) {
       continue;
     }
-    if (reviewers.length === 0) {
-      console.log(`${stopMessage}, stopping.`);
+    if (result.exitCode !== 0) {
+      console.log(doneSignalExitText(doneSignal, result.exitCode));
+    }
+    if (!shouldReview) {
+      console.log(doneSignalMissingText(doneSignal));
       return true;
     }
     const review = await runReview(reviewers, task, opts);
     if (review.approved) {
       await runDraftPrStep(task, opts, hasExistingPr);
-      console.log(`${stopMessage} and review passed, stopping.`);
+      console.log(doneSignalPassedText(opts.doneSignal));
       return true;
     }
     if (review.consensusFail) {
-      reviewNotes =
-        "Both reviewers requested changes. Decide for each comment whether to address it now. " +
-        `If you skip one, explain why briefly. If both reviews found the same issue, it might be worth addressing.\n\n${review.notes}`;
+      reviewNotes = bothReviewersNotes(review.notes);
       console.log(
         "\n[loop] both reviews collected. original agent deciding what to address."
       );
@@ -68,14 +83,9 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;
   let hasExistingPr = false;
-  let currentTask = task;
+  let loopTask = task;
   while (true) {
-    const done = await runIterations(
-      currentTask,
-      opts,
-      reviewers,
-      hasExistingPr
-    );
+    const done = await runIterations(loopTask, opts, reviewers, hasExistingPr);
     if (reviewers.length > 0 && done) {
       hasExistingPr = true;
     }
@@ -98,6 +108,6 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
       rl.close();
       return;
     }
-    currentTask = `${currentTask}\n\nFollow-up:\n${followUp}`;
+    loopTask = `${loopTask}\n\nFollow-up:\n${followUp}`;
   }
 };

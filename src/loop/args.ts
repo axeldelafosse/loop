@@ -69,6 +69,14 @@ const applyValueFlag = (
     opts.proof = trimmed;
     return;
   }
+  if (flag === "codexModel") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error("Invalid --codex-model value: cannot be empty");
+    }
+    opts.model = trimmed;
+    return;
+  }
   opts.format = parseFormat(value);
 };
 
@@ -114,6 +122,11 @@ const consumeArg = (
   if (arg === "--") {
     positional.push(...argv.slice(index + 1));
     return { nextIndex: argv.length, stop: true };
+  }
+
+  if (arg.startsWith("--codex-model=")) {
+    applyValueFlag("codexModel", arg.slice("--codex-model=".length), opts);
+    return { nextIndex: index + 1, stop: false };
   }
 
   if (arg === "--review" || arg.startsWith("--review=")) {
