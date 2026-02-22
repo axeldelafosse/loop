@@ -80,16 +80,19 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
       reviewers,
       hasExistingPr
     );
-    if (!done) {
-      console.log(
-        `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
-      );
-    }
     if (reviewers.length > 0 && done) {
       hasExistingPr = true;
     }
     if (!rl) {
+      if (!done) {
+        console.log(
+          `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
+        );
+      }
       return;
+    }
+    if (!done) {
+      console.log(`\n[loop] reached max iterations (${opts.maxIterations}).`);
     }
     const answer = await rl.question(
       "\n[loop] follow-up prompt (blank to exit): "

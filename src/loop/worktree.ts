@@ -167,14 +167,15 @@ export const maybeEnterWorktree = (
     "rev-parse",
     "--show-superproject-working-tree",
   ]);
-  if (superProject.exitCode === 0 && superProject.stdout.trim()) {
-    deps.log(
-      "[loop] already running inside a git worktree, skipping --worktree setup"
-    );
-    return;
+  let inWorktree =
+    superProject.exitCode === 0 && Boolean(superProject.stdout.trim());
+
+  if (!inWorktree) {
+    const gitDir = deps.runGit(["rev-parse", "--git-dir"]).stdout.trim();
+    inWorktree = gitDir.replaceAll("\\", "/").includes(WORKTREE_GIT_DIR_MARKER);
   }
-  const gitDir = deps.runGit(["rev-parse", "--git-dir"]).stdout.trim();
-  if (gitDir.replaceAll("\\", "/").includes(WORKTREE_GIT_DIR_MARKER)) {
+
+  if (inWorktree) {
     deps.log(
       "[loop] already running inside a git worktree, skipping --worktree setup"
     );

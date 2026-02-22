@@ -169,6 +169,20 @@ test("maybeEnterWorktree creates and enters worktree #1", () => {
   expect(logs).toContain('[loop] switched to branch "repo-loop-1"');
 });
 
+const makeWorktreeRunGit = () => (args: string[]) => {
+  const cmd = args.join(" ");
+  if (cmd === "rev-parse --show-toplevel") {
+    return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+  }
+  if (cmd === "rev-parse --verify HEAD") {
+    return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+  }
+  if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-1") {
+    return { exitCode: 1, stderr: "", stdout: "" };
+  }
+  return { exitCode: 0, stderr: "", stdout: "" };
+};
+
 test("maybeEnterWorktree moves PLAN.md into the worktree root", () => {
   const moved: Array<{ source: string; target: string }> = [];
 
@@ -179,20 +193,7 @@ test("maybeEnterWorktree moves PLAN.md into the worktree root", () => {
     log: (): void => undefined,
     pathExists: (path: string) =>
       path === "/repo-loop-1" || path === "/repo/PLAN.md",
-    runGit: (args: string[]) => {
-      if (args.join(" ") === "rev-parse --show-toplevel") {
-        return { exitCode: 0, stderr: "", stdout: "/repo\n" };
-      }
-      if (args.join(" ") === "rev-parse --verify HEAD") {
-        return { exitCode: 0, stderr: "", stdout: "abc123\n" };
-      }
-      if (
-        args.join(" ") === "show-ref --verify --quiet refs/heads/repo-loop-1"
-      ) {
-        return { exitCode: 1, stderr: "", stdout: "" };
-      }
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
+    runGit: makeWorktreeRunGit(),
     moveFile: (source: string, target: string) => {
       moved.push({ source, target });
     },
@@ -213,20 +214,7 @@ test("maybeEnterWorktree moves PLAN.md into the worktree subpath", () => {
     log: (): void => undefined,
     pathExists: (path: string) =>
       path === "/repo-loop-1/src" || path === "/repo/src/PLAN.md",
-    runGit: (args: string[]) => {
-      if (args.join(" ") === "rev-parse --show-toplevel") {
-        return { exitCode: 0, stderr: "", stdout: "/repo\n" };
-      }
-      if (args.join(" ") === "rev-parse --verify HEAD") {
-        return { exitCode: 0, stderr: "", stdout: "abc123\n" };
-      }
-      if (
-        args.join(" ") === "show-ref --verify --quiet refs/heads/repo-loop-1"
-      ) {
-        return { exitCode: 1, stderr: "", stdout: "" };
-      }
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
+    runGit: makeWorktreeRunGit(),
     moveFile: (source: string, target: string) => {
       moved.push({ source, target });
     },
