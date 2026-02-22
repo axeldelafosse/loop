@@ -13,6 +13,7 @@ const runIterations = async (
   hasExistingPr = false
 ): Promise<boolean> => {
   let reviewNotes = "";
+  const stopMessage = `\n[loop] done signal "${opts.doneSignal}" detected`;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
   for (let i = 1; i <= opts.maxIterations; i++) {
     const tag = Number.isFinite(opts.maxIterations)
@@ -32,22 +33,17 @@ const runIterations = async (
         `[loop] ${opts.agent} exited with code ${result.exitCode}`
       );
     }
-    const output = `${result.parsed}\n${result.combined}`;
-    if (!hasSignal(output, opts.doneSignal)) {
+    if (!hasSignal(`${result.parsed}\n${result.combined}`, opts.doneSignal)) {
       continue;
     }
     if (reviewers.length === 0) {
-      console.log(
-        `\n[loop] done signal "${opts.doneSignal}" detected, stopping.`
-      );
+      console.log(`${stopMessage}, stopping.`);
       return true;
     }
     const review = await runReview(reviewers, task, opts);
     if (review.approved) {
       await runDraftPrStep(task, opts, hasExistingPr);
-      console.log(
-        `\n[loop] done signal "${opts.doneSignal}" detected and review passed, stopping.`
-      );
+      console.log(`${stopMessage} and review passed, stopping.`);
       return true;
     }
     if (review.consensusFail) {

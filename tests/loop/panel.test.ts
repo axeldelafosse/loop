@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { panelInternals } from "../../src/loop/panel";
 
 test("parseProcessList keeps codex engine and deduplicates wrapper", () => {
@@ -12,6 +15,85 @@ test("parseProcessList keeps codex engine and deduplicates wrapper", () => {
   expect(rows).toEqual([
     { agent: "codex", pid: 54_666 },
     { agent: "claude", pid: 88_398 },
+  ]);
+});
+
+test("parseProcessList deduplicates codex app-server wrapper and engine", () => {
+  const output = `
+  PID  PPID COMMAND
+  66100 1200 codex app-server
+  66101 66100 /usr/local/bin/node /Users/me/.nvm/.../node_modules/@openai/codex/dist/app-server.js
+  77220 1201 claude
+ `.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_101 },
+    { agent: "claude", pid: 77_220 },
+  ]);
+});
+
+test("parseProcessList handles node app-server launches with runtime flags", () => {
+  const output = `
+  PID  PPID COMMAND
+  66110 1200 node --no-warnings /Users/me/.nvm/.../node_modules/@openai/codex/dist/app-server.js
+  77230 1201 claude
+  `.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_110 },
+    { agent: "claude", pid: 77_230 },
+  ]);
+});
+
+test("parseProcessList detects a direct codex app-server process", () => {
+  const output = `
+  PID  PPID COMMAND
+  66200 1200 /usr/local/bin/codex-app-server run
+  77221 1201 claude
+`.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_200 },
+    { agent: "claude", pid: 77_221 },
+  ]);
+});
+
+test("parseProcessList detects a bare app-server process", () => {
+  const output = `
+  PID  PPID COMMAND
+  66300 1200 app-server
+  77231 1201 claude
+  `.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_300 },
+    { agent: "claude", pid: 77_231 },
+  ]);
+});
+
+test("parseProcessList detects a bun app-server invocation with flags", () => {
+  const output = `
+  PID  PPID COMMAND
+  66201 1200 bun --inspect=0.0.0.0:9229 /Users/me/.nvm/versions/node/v24.9.0/bin/codex app-server
+  77222 1201 claude
+`.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_201 },
+    { agent: "claude", pid: 77_222 },
+  ]);
+});
+
+test("parseProcessList detects a standalone app-server invocation", () => {
+  const output = `
+  PID  PPID COMMAND
+  66202 1200 app-server run
+  77223 1201 claude
+`.trim();
+  const rows = panelInternals.parseProcessList(output);
+  expect(rows).toEqual([
+    { agent: "codex", pid: 66_202 },
+    { agent: "claude", pid: 77_223 },
   ]);
 });
 
@@ -142,4 +224,22 @@ test("buildLines uses stacked layout on narrow terminals", () => {
   ).toBe(true);
   expect(lines.some((line) => line.startsWith("session: "))).toBe(true);
   expect(lines.some((line) => line.startsWith("final: "))).toBe(true);
+});
+
+test("parseCodexHistoryRow falls back to top-level session keys when payload is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "loop-codex-history-"));
+  const path = join(dir, "session-123.jsonl");
+  writeFileSync(
+    path,
+    `${JSON.stringify({ id: "session-123", cwd: "/repo/example" })}\n${JSON.stringify(
+      {
+        type: "turn/completed",
+      }
+    )}\n`
+  );
+  const row = panelInternals.parseCodexHistoryRow(path);
+  rmSync(dir, { recursive: true, force: true });
+  expect(row?.row.session).toBe("session-123");
+  expect(row?.row.cwd).toBe("/repo/example");
+  expect(row?.row.event).toBe("turn/completed");
 });

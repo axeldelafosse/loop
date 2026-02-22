@@ -40,6 +40,8 @@ const loadRunLoop = async (mocks: {
   runReview?: () => Promise<ReviewResult>;
   question?: () => Promise<string>;
 }) => {
+  mock.restore();
+  const realReview = await import("../../src/loop/review");
   mock.module("node:readline/promises", () => ({
     createInterface: mock(() => ({
       close: mock(() => undefined),
@@ -52,6 +54,7 @@ const loadRunLoop = async (mocks: {
   mock.module("../../src/loop/review", () => ({
     resolveReviewers: mock(mocks.resolveReviewers ?? (() => [])),
     runReview: mock(mocks.runReview ?? noopReview),
+    createRunReview: realReview.createRunReview,
   }));
   mock.module("../../src/loop/runner", () => ({
     runAgent: mock(mocks.runAgent ?? (async () => makeRunResult("working"))),
@@ -126,7 +129,19 @@ test("runLoop uses follow-up commit prompt after a PR is already created", async
     question: async () => answers.shift() ?? "",
   });
 
-  await runLoop("Ship feature", makeOptions({ review: "claudex" }));
+  const originalIsTty = process.stdin.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  try {
+    await runLoop("Ship feature", makeOptions({ review: "claudex" }));
+  } finally {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: originalIsTty,
+    });
+  }
 
   expect(runAgent).toHaveBeenCalledTimes(2);
   expect(runReview).toHaveBeenCalledTimes(2);
