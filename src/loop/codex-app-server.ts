@@ -33,7 +33,7 @@ interface TurnState {
 const APP_SERVER_CMD = "codex";
 const APP_SERVER_ARGS = ["app-server"];
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
-const WAIT_TIMEOUT_MS = 30_000;
+const WAIT_TIMEOUT_MS = 600_000;
 
 export const CODEX_TRANSPORT_APP_SERVER: TransportMode = "app-server";
 export const CODEX_TRANSPORT_EXEC: TransportMode = "exec";

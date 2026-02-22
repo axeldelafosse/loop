@@ -40,9 +40,20 @@ const buildShellCommand = (argv: string[]): string =>
 
 const stripTmuxFlag = (argv: string[]): string[] =>
   argv.filter((arg) => arg !== TMUX_FLAG);
+const isScriptPath = (path: string): boolean =>
+  path.endsWith(".ts") ||
+  path.endsWith(".tsx") ||
+  path.endsWith(".js") ||
+  path.endsWith(".mjs") ||
+  path.endsWith(".cjs");
+const isBunExecutable = (value: string): boolean => {
+  const file = basename(value);
+  return file === "bun" || file === "bun.exe";
+};
 
 const MAX_SESSION_ATTEMPTS = 10_000;
 const SESSION_CONFLICT_RE = /duplicate session|already exists/i;
+const NO_SESSION_RE = /no sessions|couldn't find session|session .* not found/i;
 const resolveRunBase = (cwd: string): string => {
   try {
     const repoRoot = runGit(cwd, ["rev-parse", "--show-toplevel"], "ignore");
@@ -114,20 +125,73 @@ const commandExists = (cmd: string): boolean => {
 const isSessionConflict = (stderr: string): boolean =>
   SESSION_CONFLICT_RE.test(stderr);
 
+const sessionExists = (
+  session: string,
+  spawnFn: TmuxDeps["spawn"]
+): boolean => {
+  const result = spawnFn(["tmux", "has-session", "-t", session]);
+  return result.exitCode === 0;
+};
+
+const keepSessionAttached = (
+  session: string,
+  spawnFn: TmuxDeps["spawn"]
+): void => {
+  spawnFn([
+    "tmux",
+    "set-window-option",
+    "-t",
+    `${session}:0`,
+    "remain-on-exit",
+    "on",
+  ]);
+};
+
+const isSessionGone = (
+  session: string,
+  error: unknown,
+  spawnFn: TmuxDeps["spawn"]
+): boolean =>
+  !sessionExists(session, spawnFn) ||
+  (error instanceof Error && NO_SESSION_RE.test(error.message));
+
+const buildSessionCommand = (
+  deps: TmuxDeps,
+  env: string[],
+  forwardedArgv: string[]
+): string => {
+  return buildShellCommand([
+    "env",
+    ...env,
+    ...deps.launchArgv,
+    ...forwardedArgv,
+  ]);
+};
+
 const buildLaunchArgv = (
   processArgv: string[] = process.argv,
   execPath: string = process.execPath
 ): string[] => {
   const scriptArg = processArgv[1];
+  const commandPath = processArgv[0];
   if (
     !scriptArg ||
     scriptArg.startsWith("-") ||
     scriptArg.startsWith("/$bunfs/")
   ) {
-    return [execPath];
+    if (
+      !(commandPath && isAbsolute(commandPath)) ||
+      isBunExecutable(commandPath)
+    ) {
+      return [execPath];
+    }
+    return [commandPath];
   }
   const scriptPath = isAbsolute(scriptArg) ? scriptArg : resolvePath(scriptArg);
-  return [execPath, scriptPath];
+  if (isBunExecutable(execPath) || isScriptPath(scriptPath)) {
+    return [execPath, scriptPath];
+  }
+  return commandPath ? [commandPath] : [execPath];
 };
 
 const defaultDeps = (): TmuxDeps => ({
@@ -155,6 +219,70 @@ const defaultDeps = (): TmuxDeps => ({
   },
 });
 
+const findSession = (argv: string[], deps: TmuxDeps): string => {
+  const forwardedArgv = stripTmuxFlag(argv);
+  const runBase = resolveRunBase(deps.cwd);
+  const needsWorktree = argv.includes(WORKTREE_FLAG);
+
+  for (let index = 1; index <= MAX_SESSION_ATTEMPTS; index++) {
+    const candidate = buildRunName(runBase, index);
+    if (needsWorktree && !worktreeAvailable(deps.cwd, candidate)) {
+      continue;
+    }
+
+    const command = buildSessionCommand(
+      deps,
+      [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${index}`],
+      forwardedArgv
+    );
+    const result = deps.spawn([
+      "tmux",
+      "new-session",
+      "-d",
+      "-s",
+      candidate,
+      "-c",
+      deps.cwd,
+      command,
+    ]);
+
+    if (result.exitCode === 0) {
+      return candidate;
+    }
+
+    if (!isSessionConflict(result.stderr)) {
+      const suffix = result.stderr ? `: ${result.stderr}` : ".";
+      throw new Error(`Failed to start tmux session${suffix}`);
+    }
+  }
+
+  return "";
+};
+
+const attachSessionIfInteractive = (
+  session: string,
+  deps: TmuxDeps
+): boolean => {
+  if (!deps.isInteractive()) {
+    return true;
+  }
+
+  try {
+    deps.attach(session);
+    return true;
+  } catch (error: unknown) {
+    if (isSessionGone(session, error, deps.spawn)) {
+      deps.log(
+        `[loop] tmux session "${session}" exited before attach, continuing here.`
+      );
+      return false;
+    }
+    throw error instanceof Error
+      ? error
+      : new Error(`Failed to attach to tmux session "${session}".`);
+  }
+};
+
 export const runInTmux = (
   argv: string[],
   overrides: Partial<TmuxDeps> = {}
@@ -172,44 +300,7 @@ export const runInTmux = (
     throw new Error(TMUX_MISSING_ERROR);
   }
 
-  const forwardedArgv = stripTmuxFlag(argv);
-  const runBase = resolveRunBase(deps.cwd);
-  const needsWorktree = argv.includes(WORKTREE_FLAG);
-  let session = "";
-  for (let index = 1; index <= MAX_SESSION_ATTEMPTS; index++) {
-    const candidate = buildRunName(runBase, index);
-    if (needsWorktree && !worktreeAvailable(deps.cwd, candidate)) {
-      continue;
-    }
-
-    const command = buildShellCommand([
-      "env",
-      `${RUN_BASE_ENV}=${runBase}`,
-      `${RUN_ID_ENV}=${index}`,
-      ...deps.launchArgv,
-      ...forwardedArgv,
-    ]);
-    const result = deps.spawn([
-      "tmux",
-      "new-session",
-      "-d",
-      "-s",
-      candidate,
-      "-c",
-      deps.cwd,
-      command,
-    ]);
-    if (result.exitCode === 0) {
-      session = candidate;
-      break;
-    }
-    if (isSessionConflict(result.stderr)) {
-      continue;
-    }
-
-    const suffix = result.stderr ? `: ${result.stderr}` : ".";
-    throw new Error(`Failed to start tmux session${suffix}`);
-  }
+  const session = findSession(argv, deps);
 
   if (!session) {
     throw new Error(
@@ -217,12 +308,15 @@ export const runInTmux = (
     );
   }
 
+  if (!sessionExists(session, deps.spawn)) {
+    throw new Error(`tmux session "${session}" exited before attach.`);
+  }
+
+  keepSessionAttached(session, deps.spawn);
+
   deps.log(`[loop] started tmux session "${session}"`);
   deps.log(`[loop] attach with: tmux attach -t ${session}`);
-  if (deps.isInteractive()) {
-    deps.attach(session);
-  }
-  return true;
+  return attachSessionIfInteractive(session, deps);
 };
 
 export const tmuxInternals = {

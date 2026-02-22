@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { resolve } from "node:path";
+import { DEFAULT_CLAUDE_MODEL } from "../../src/loop/constants";
 import type { Options, RunResult } from "../../src/loop/types";
 
 interface AppServerModule {
@@ -53,6 +54,11 @@ let runAgent: (
   prompt: string,
   opts: Options
 ) => Promise<RunResult>;
+let buildCommand: (
+  agent: string,
+  prompt: string,
+  model: string
+) => { args: string[]; cmd: string };
 const startAppServer: MockFn<() => Promise<void>> = mock(async () => undefined);
 const useAppServer: MockFn<() => boolean> = mock(
   () => process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC
@@ -85,7 +91,9 @@ installCodexServerMock();
 beforeEach(async () => {
   mock.restore();
   installCodexServerMock();
-  ({ runAgent, runnerInternals } = await import(runnerImportPath));
+  ({ runAgent, buildCommand, runnerInternals } = await import(
+    runnerImportPath
+  ));
   process.env[CODEX_TRANSPORT_ENV] = "";
   startAppServer.mockReset();
   startAppServer.mockResolvedValue(undefined);
@@ -119,6 +127,17 @@ test("runAgent uses app-server transport by default", async () => {
   expect(startAppServer).toHaveBeenCalledTimes(1);
   expect(runCodexTurn).toHaveBeenCalledTimes(1);
   expect(runnerInternals).toBeDefined();
+});
+
+test("buildCommand uses Opus for Claude regardless of codex-model override", () => {
+  const command = buildCommand(
+    "claude",
+    "summarize the issue",
+    "gpt-5.3-codex-spark"
+  );
+  const modelArgIndex = command.args.indexOf("--model");
+  expect(modelArgIndex).toBeGreaterThan(-1);
+  expect(command.args[modelArgIndex + 1]).toBe(DEFAULT_CLAUDE_MODEL);
 });
 
 test("runAgent honors CODEX_TRANSPORT=exec and uses legacy codex exec", async () => {

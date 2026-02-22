@@ -78,7 +78,7 @@ const runIterations = async (
 
 export const runLoop = async (task: string, opts: Options): Promise<void> => {
   const reviewers = resolveReviewers(opts.review, opts.agent);
-  const interactive = process.stdin.isTTY || Boolean(process.env.TMUX);
+  const interactive = process.stdin.isTTY;
   const rl = interactive
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;

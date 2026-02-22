@@ -54,17 +54,29 @@ test("runInTmux starts detached session and strips --tmux", () => {
   });
 
   expect(delegated).toBe(true);
-  expect(calls).toEqual([
-    [
-      "tmux",
-      "new-session",
-      "-d",
-      "-s",
-      "repo-loop-1",
-      "-c",
-      "/repo",
-      "'env' 'LOOP_RUN_BASE=repo' 'LOOP_RUN_ID=1' 'bun' '/repo/src/loop.ts' '--proof' 'verify' 'fix bug'",
-    ],
+  expect(calls[0]).toEqual([
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    "repo-loop-1",
+    "-c",
+    "/repo",
+    expect.stringContaining("env"),
+  ]);
+  expect(calls[0]?.[7]).toContain("env");
+  expect(calls[0]?.[7]).toContain("LOOP_RUN_BASE=repo");
+  expect(calls[0]?.[7]).toContain("LOOP_RUN_ID=1");
+  expect(calls[0]?.[7]).toContain("bun");
+  expect(calls[0]?.[7]).toContain("/repo/src/loop.ts");
+  expect(calls[1]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  expect(calls[2]).toEqual([
+    "tmux",
+    "set-window-option",
+    "-t",
+    "repo-loop-1:0",
+    "remain-on-exit",
+    "on",
   ]);
   expect(logs).toContain('[loop] started tmux session "repo-loop-1"');
   expect(logs).toContain("[loop] attach with: tmux attach -t repo-loop-1");
@@ -85,6 +97,9 @@ test("runInTmux increments session index on conflicts", () => {
       if (name === "repo-loop-1") {
         return { exitCode: 1, stderr: "duplicate session: repo-loop-1" };
       }
+      if (args[0] === "tmux" && args[1] === "has-session") {
+        return { exitCode: 0, stderr: "" };
+      }
       return { exitCode: 0, stderr: "" };
     },
   });
@@ -92,6 +107,15 @@ test("runInTmux increments session index on conflicts", () => {
   expect(delegated).toBe(true);
   expect(calls[0]?.[4]).toBe("repo-loop-1");
   expect(calls[1]?.[4]).toBe("repo-loop-2");
+  expect(calls[2]).toEqual(["tmux", "has-session", "-t", "repo-loop-2"]);
+  expect(calls[3]).toEqual([
+    "tmux",
+    "set-window-option",
+    "-t",
+    "repo-loop-2:0",
+    "remain-on-exit",
+    "on",
+  ]);
 });
 
 test("runInTmux surfaces tmux startup errors", () => {
@@ -120,6 +144,21 @@ test("runInTmux skips auto-attach for non-interactive sessions", () => {
 
   expect(delegated).toBe(true);
   expect(attaches).toEqual([]);
+});
+
+test("runInTmux reports when tmux session exits before attach", () => {
+  expect(() =>
+    runInTmux(["--tmux", "--proof", "verify"], {
+      env: {},
+      findBinary: () => true,
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return { exitCode: 1, stderr: "session not found" };
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+    })
+  ).toThrow('tmux session "loop-loop-1" exited before attach.');
 });
 
 test("tmux internals strip --tmux from forwarded args", () => {
@@ -151,6 +190,45 @@ test("tmux internals build launch argv for bun-compiled binary", () => {
       "/private/tmp/loop"
     )
   ).toEqual(["/private/tmp/loop"]);
+});
+
+test("tmux internals build launch argv for executable with no script arg", () => {
+  expect(
+    tmuxInternals.buildLaunchArgv(
+      ["/usr/local/bin/loop", "--tmux", "--proof", "verify"],
+      "/usr/local/bin/bun"
+    )
+  ).toEqual(["/usr/local/bin/loop"]);
+});
+
+test("tmux internals build launch argv for installed executable", () => {
+  expect(
+    tmuxInternals.buildLaunchArgv(
+      [
+        "/Users/lume/.local/bin/loop",
+        "build launch command",
+        "--tmux",
+        "--proof",
+        "verify",
+      ],
+      "/Users/lume/.local/bin/loop"
+    )
+  ).toEqual(["/Users/lume/.local/bin/loop"]);
+});
+
+test("tmux internals build launch argv when bun executes installed binary", () => {
+  expect(
+    tmuxInternals.buildLaunchArgv(
+      [
+        "/usr/local/bin/bun",
+        "/Users/lume/.local/bin/loop",
+        "--tmux",
+        "--proof",
+        "verify",
+      ],
+      "/usr/local/bin/bun"
+    )
+  ).toEqual(["/usr/local/bin/bun", "/Users/lume/.local/bin/loop"]);
 });
 
 test("tmux internals quote single quotes safely", () => {

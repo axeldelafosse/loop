@@ -9,7 +9,7 @@ import {
   startAppServer,
   useAppServer,
 } from "./codex-app-server";
-import { DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL } from "./constants";
+import { DEFAULT_CLAUDE_MODEL } from "./constants";
 import type { Agent, Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
@@ -77,14 +77,12 @@ const syncSignalHandlers = (): void => {
   }
 };
 
-const buildCommand = (
+export const buildCommand = (
   agent: Agent,
   prompt: string,
   model: string
 ): SpawnConfig => {
   if (agent === "claude") {
-    const claudeModel =
-      model && model !== DEFAULT_CODEX_MODEL ? model : DEFAULT_CLAUDE_MODEL;
     return {
       args: [
         "-p",
@@ -94,7 +92,7 @@ const buildCommand = (
         "stream-json",
         "--verbose",
         "--model",
-        claudeModel,
+        DEFAULT_CLAUDE_MODEL,
       ],
       cmd: "claude",
     };
