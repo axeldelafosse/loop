@@ -2,6 +2,14 @@
 
 Dead simple Bun CLI that runs `codex` and `claude` in a loop. The [main loop](https://github.com/axeldelafosse/loop/blob/main/src/loop/main.ts#L14) is ~50 lines of easy-to-read code.
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash
+```
+
+```bash
+loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --worktree
+```
+
 ## What this is
 
 This _is_ a "meta agent loop" to help coding agents become long-running agents. Stop baby sitting your agents: let them iterate on tasks with clear proof requirements until they are done. Run multiple reviews to continue the feedback loop.
@@ -52,14 +60,14 @@ Installer currently supports macOS and Linux and installs to `~/.local/bin/loop`
 
 ```bash
 # run from source
-./loop.ts --prompt "Implement feature X" --proof "Use X skill to verify your changes"
+./loop.ts --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
 # open live panel of running claude/codex instances
 ./loop.ts
 
 # build executable
 bun run build
-./loop --prompt "Implement feature X" --proof "Use X skill to verify your changes"
+./loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
 # same live panel behavior on built binary
 ./loop
@@ -67,7 +75,7 @@ bun run build
 
 Some notes:
 
-- You can pass prompt text positionally (`loop "Implement feature X"`) or via `--prompt`.
+- You can pass prompt text positionally (`loop "Implement {feature}"`) or via `--prompt`.
 - `--proof` is required and should describe how to prove the task works (tests, commands, and checks to run). You should be super specific based on the prompt.
 - If the input is plain text (not a `.md` path), `loop` first runs a planning step to create `PLAN.md`, then uses `PLAN.md` for the main loop.
 - Running with no args opens the live panel. To run the loop with `PLAN.md`, pass at least `--proof`.
@@ -145,31 +153,31 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 
 ```bash
 # use PLAN.md automatically
-./loop --proof "Use X skill to verify your changes"
+./loop --proof "Use {skill} to verify your changes"
 
 # two iteration, raw JSON/event output
-./loop -m 2 --proof "Use X skill to verify your changes" "Implement feature X" --format raw
+./loop -m 2 --proof "Use {skill} to verify your changes" "Implement {feature}" --format raw
 
 # plain text prompt: auto-creates PLAN.md, then runs from PLAN.md
-./loop --proof "Use X skill to verify your changes" "Implement feature X"
+./loop --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run with claude
-./loop --proof "Use X skill to verify your changes" --agent claude --prompt PLAN.md
+./loop --proof "Use {skill} to verify your changes" --agent claude --prompt PLAN.md
 
 # run review with a single reviewer
-./loop --proof "Use X skill to verify your changes" "Implement feature X" --review codex
+./loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review codex
 
 # run claudex reviewers when done (default behavior)
-./loop --proof "Use X skill to verify your changes" "Implement feature X" --review claudex
+./loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review claudex
 
 # run in detached tmux session (good for SSH)
-./loop --tmux --proof "Use X skill to verify your changes" "Implement feature X"
+./loop --tmux --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run in a fresh git worktree automatically
-./loop --worktree --proof "Use X skill to verify your changes" "Implement feature X"
+./loop --worktree --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run in detached tmux session in a fresh git worktree automatically
-./loop --tmux --worktree --proof "Use X skill to verify your changes" "Implement feature X"
+./loop --tmux --worktree --proof "Use {skill} to verify your changes" "Implement {feature}"
 ```
 
 ## License
