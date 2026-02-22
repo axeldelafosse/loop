@@ -334,18 +334,19 @@ test("applyStagedUpdateOnStartup logs error on write failure", async () => {
   }
 });
 
-// --- handleManualUpdateCommand staging ---
+// --- handleManualUpdateCommand apply ---
 
-test("handleManualUpdateCommand stages update with correct metadata", async () => {
+test("handleManualUpdateCommand applies update to executable", async () => {
   const osName = process.platform === "darwin" ? "macos" : "linux";
   const assetName = `loop-${osName}-${process.arch}`;
 
   const originalExecPath = process.execPath;
+  const testExecPath = "/tmp/loop-update-test-binary";
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
 
   Object.defineProperty(process, "execPath", {
-    value: "/tmp/loop-update-test-binary",
+    value: testExecPath,
     configurable: true,
   });
 
@@ -387,13 +388,9 @@ test("handleManualUpdateCommand stages update with correct metadata", async () =
     );
     await handleManualUpdateCommand(["update"]);
 
-    expect(existsSync(STAGED_BINARY)).toBe(true);
-    expect(existsSync(METADATA_FILE)).toBe(true);
-
-    const metadata = JSON.parse(readFileSync(METADATA_FILE, "utf-8"));
-    expect(metadata.targetVersion).toBe("99.0.0");
-    expect(metadata.sourceUrl).toBe("https://example.com/loop-binary");
-    expect(metadata.downloadedAt).toBeTruthy();
+    expect(existsSync(STAGED_BINARY)).toBe(false);
+    expect(existsSync(METADATA_FILE)).toBe(false);
+    expect(readFileSync(testExecPath, "utf-8")).toBe(binaryData);
   } finally {
     Object.defineProperty(process, "execPath", {
       value: originalExecPath,
@@ -406,6 +403,9 @@ test("handleManualUpdateCommand stages update with correct metadata", async () =
     }
     if (existsSync(METADATA_FILE)) {
       unlinkSync(METADATA_FILE);
+    }
+    if (existsSync(testExecPath)) {
+      unlinkSync(testExecPath);
     }
   }
 });
@@ -482,9 +482,10 @@ test("update verifies matching checksum", async () => {
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
   const originalError = console.error;
+  const testExecPath = "/tmp/loop-checksum-test-binary";
 
   Object.defineProperty(process, "execPath", {
-    value: "/tmp/loop-checksum-test-binary",
+    value: testExecPath,
     configurable: true,
   });
 
@@ -525,29 +526,19 @@ test("update verifies matching checksum", async () => {
     );
     expect(await handleManualUpdateCommand(["update"])).toBe(true);
 
-    expect(existsSync(STAGED_BINARY)).toBe(true);
-    expect(existsSync(METADATA_FILE)).toBe(true);
-    expect(readFileSync(STAGED_BINARY, "utf-8")).toBe(binaryData);
-    const metadata = JSON.parse(readFileSync(METADATA_FILE, "utf-8"));
-    expect(metadata.targetVersion).toBe("99.0.0");
-    expect(metadata.sourceUrl).toBe("https://example.com/loop-binary");
-    expect(metadata.downloadedAt).toBeTruthy();
+    expect(existsSync(STAGED_BINARY)).toBe(false);
+    expect(existsSync(METADATA_FILE)).toBe(false);
+    expect(readFileSync(testExecPath, "utf-8")).toBe(binaryData);
     expect(errorMock).not.toHaveBeenCalled();
     const logMessages = logMock.mock.calls.map((call) => String(call[0]));
     expect(
       logMessages.some((msg) => msg.includes("[loop] downloading v99.0.0..."))
     ).toBe(true);
     expect(
-      logMessages.some((msg) =>
-        msg.includes("[loop] v99.0.0 staged — will apply on next startup")
-      )
+      logMessages.some((msg) => msg.includes("[loop] v99.0.0 applied"))
     ).toBe(true);
     expect(fetchMock.mock.calls).toHaveLength(3);
   } finally {
-    Object.defineProperty(process, "execPath", {
-      value: originalExecPath,
-      configurable: true,
-    });
     globalThis.fetch = originalFetch;
     console.log = originalLog;
     console.error = originalError;
@@ -557,6 +548,13 @@ test("update verifies matching checksum", async () => {
     if (existsSync(METADATA_FILE)) {
       unlinkSync(METADATA_FILE);
     }
+    if (existsSync(testExecPath)) {
+      unlinkSync(testExecPath);
+    }
+    Object.defineProperty(process, "execPath", {
+      value: originalExecPath,
+      configurable: true,
+    });
   }
 });
 

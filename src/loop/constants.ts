@@ -12,7 +12,7 @@ loop - v${LOOP_VERSION} - meta agent loop runner
 Usage:
   loop                              Open live panel for running claude/codex instances
   loop [options] [prompt]
-  loop update                       Check for updates and stage if available
+  loop update                       Check for updates and apply if available
   loop upgrade                      Alias for update
 
 Options:
@@ -31,7 +31,7 @@ Options:
 
 Auto-update:
   Updates are checked automatically on startup and applied on the next run.
-  Use "loop update" to manually check and stage an update.
+  Use "loop update" to manually check and apply an update.
 `.trim();
 
 export const REVIEW_PASS = "<review>PASS</review>";

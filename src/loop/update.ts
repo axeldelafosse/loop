@@ -153,12 +153,18 @@ const verifyChecksum = async (
   }
 };
 
-const downloadAndStage = async (
+const applyBinary = (binary: Buffer): void => {
+  const execPath = process.execPath;
+  const tmpPath = `${execPath}.tmp-${Date.now()}`;
+  writeFileSync(tmpPath, binary);
+  chmodSync(tmpPath, 0o755);
+  renameSync(tmpPath, execPath);
+};
+
+const downloadBinary = async (
   url: string,
-  version: string,
   checksumUrl?: string
-): Promise<void> => {
-  ensureCacheDir();
+): Promise<Buffer> => {
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Download failed: HTTP ${res.status}`);
@@ -167,7 +173,6 @@ const downloadAndStage = async (
   if (buf.byteLength === 0) {
     throw new Error("Downloaded file is empty");
   }
-
   if (checksumUrl) {
     await verifyChecksum(buf, checksumUrl);
   } else {
@@ -175,6 +180,16 @@ const downloadAndStage = async (
       "No .sha256 checksum available — refusing to install unverified binary"
     );
   }
+  return buf;
+};
+
+const downloadAndStage = async (
+  url: string,
+  version: string,
+  checksumUrl?: string
+): Promise<void> => {
+  ensureCacheDir();
+  const buf = await downloadBinary(url, checksumUrl);
 
   writeFileSync(STAGED_BINARY, buf);
   chmodSync(STAGED_BINARY, 0o755);
@@ -199,12 +214,7 @@ export const applyStagedUpdateOnStartup = (): Promise<void> => {
     const metadata: UpdateMetadata = JSON.parse(
       readFileSync(METADATA_FILE, "utf-8")
     );
-    const execPath = process.execPath;
-    const tmpPath = `${execPath}.tmp-${Date.now()}`;
-
-    writeFileSync(tmpPath, readFileSync(STAGED_BINARY));
-    chmodSync(tmpPath, 0o755);
-    renameSync(tmpPath, execPath);
+    applyBinary(readFileSync(STAGED_BINARY));
 
     unlinkSync(STAGED_BINARY);
     unlinkSync(METADATA_FILE);
@@ -255,6 +265,44 @@ const checkAndStage = async (
   }
 };
 
+const checkAndApply = async (
+  assetName: string,
+  silent: boolean
+): Promise<void> => {
+  const currentVersion = getCurrentVersion();
+  const release = await fetchLatestRelease();
+  const version = release.tag_name.replace(VERSION_PREFIX_RE, "");
+
+  if (!isNewerVersion(version, currentVersion)) {
+    if (!silent) {
+      console.log(`[loop] already up to date (v${currentVersion})`);
+    }
+    return;
+  }
+
+  const asset = release.assets.find((a) => a.name === assetName);
+  if (!asset) {
+    throw new Error(`No release asset for ${assetName}`);
+  }
+
+  if (!silent) {
+    console.log(`[loop] downloading v${version}...`);
+  }
+
+  const checksumAsset = release.assets.find(
+    (a) => a.name === `${assetName}.sha256`
+  );
+  const binary = await downloadBinary(
+    asset.browser_download_url,
+    checksumAsset?.browser_download_url
+  );
+  applyBinary(binary);
+
+  if (!silent) {
+    console.log(`[loop] v${version} applied`);
+  }
+};
+
 export const handleManualUpdateCommand = async (
   argv: string[]
 ): Promise<boolean> => {
@@ -269,7 +317,7 @@ export const handleManualUpdateCommand = async (
   }
 
   try {
-    await checkAndStage(getAssetName(), false);
+    await checkAndApply(getAssetName(), false);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`[loop] update failed: ${msg}`);
