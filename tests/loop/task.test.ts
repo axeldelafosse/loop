@@ -38,10 +38,12 @@ const loadResolveTask = async (deps: TaskDeps = {}) => {
         parsed: "",
       }))
   );
+  const realUtils = await import("../../src/loop/utils");
 
   mock.module("../../src/loop/utils", () => ({
     isFile: isFileMock,
     readPrompt: readPromptMock,
+    hasSignal: realUtils.hasSignal,
   }));
   mock.module("../../src/loop/runner", () => ({ runAgent: runAgentMock }));
 

@@ -1,8 +1,31 @@
 import { spawn } from "bun";
+import {
+  CODEX_TRANSPORT_ENV,
+  CODEX_TRANSPORT_EXEC,
+  CodexAppServerFallbackError,
+  hasAppServerProcess,
+  interruptAppServer,
+  runCodexTurn,
+  startAppServer,
+  useAppServer,
+} from "./codex-app-server";
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL } from "./constants";
 import type { Agent, Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
+interface SpawnConfig {
+  args: string[];
+  cmd: string;
+}
+type LegacyAgentRunner = (
+  agent: Agent,
+  prompt: string,
+  opts: Options
+) => Promise<RunResult>;
+interface RunnerState {
+  runLegacyAgent: LegacyAgentRunner;
+  useAppServer: () => boolean;
+}
 
 const SIGNAL_EXIT_CODES: Record<ExitSignal, number> = {
   SIGINT: 130,
@@ -10,7 +33,13 @@ const SIGNAL_EXIT_CODES: Record<ExitSignal, number> = {
 };
 
 const activeChildren = new Set<ReturnType<typeof spawn>>();
+let activeAppServerRuns = 0;
 let watchingSignals = false;
+let fallbackWarned = false;
+const runnerState: RunnerState = {
+  runLegacyAgent: (agent, prompt, opts) => runLegacyAgent(agent, prompt, opts),
+  useAppServer: () => useAppServer(),
+};
 
 const killChildren = (signal: ExitSignal): void => {
   for (const child of activeChildren) {
@@ -20,23 +49,28 @@ const killChildren = (signal: ExitSignal): void => {
 
 const onSigint = (): void => {
   killChildren("SIGINT");
+  interruptAppServer("SIGINT");
   process.exit(SIGNAL_EXIT_CODES.SIGINT);
 };
 
 const onSigterm = (): void => {
   killChildren("SIGTERM");
+  interruptAppServer("SIGTERM");
   process.exit(SIGNAL_EXIT_CODES.SIGTERM);
 };
 
 const syncSignalHandlers = (): void => {
-  if (activeChildren.size > 0 && !watchingSignals) {
+  const hasAppServerWork = hasAppServerProcess();
+  const hasWork =
+    activeChildren.size > 0 || activeAppServerRuns > 0 || hasAppServerWork;
+  if (hasWork && !watchingSignals) {
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
     watchingSignals = true;
     return;
   }
 
-  if (activeChildren.size === 0 && watchingSignals) {
+  if (!hasWork && watchingSignals) {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     watchingSignals = false;
@@ -47,7 +81,7 @@ const buildCommand = (
   agent: Agent,
   prompt: string,
   model: string
-): { args: string[]; cmd: string } => {
+): SpawnConfig => {
   if (agent === "claude") {
     const claudeModel =
       model && model !== DEFAULT_CODEX_MODEL ? model : DEFAULT_CLAUDE_MODEL;
@@ -156,7 +190,94 @@ const consume = async (
   }
 };
 
-export const runAgent = async (
+const appendParsedLine = (
+  text: string,
+  opts: Options,
+  state: { parsed: string; prettyCount: number; lastMessage: string }
+): { parsed: string; prettyCount: number; lastMessage: string } => {
+  const trimmed = text.trim();
+  if (!trimmed || (opts.format === "pretty" && trimmed === state.lastMessage)) {
+    return state;
+  }
+  if (opts.format === "pretty") {
+    if (state.prettyCount > 0) {
+      process.stdout.write("\n");
+    }
+    process.stdout.write(`${trimmed}\n`);
+    return {
+      lastMessage: trimmed,
+      prettyCount: state.prettyCount + 1,
+      parsed: `${state.parsed ? `${state.parsed}\n` : ""}${trimmed}`,
+    };
+  }
+
+  return {
+    ...state,
+    lastMessage: trimmed,
+    parsed: `${state.parsed ? `${state.parsed}\n` : ""}${trimmed}`,
+  };
+};
+
+const runCodexAgent = async (
+  prompt: string,
+  opts: Options
+): Promise<RunResult> => {
+  if (!runnerState.useAppServer()) {
+    return runnerState.runLegacyAgent("codex", prompt, opts);
+  }
+
+  let parsed = "";
+  let state = { parsed: "", prettyCount: 0, lastMessage: "" };
+  const onParsed = (text: string): void => {
+    state = appendParsedLine(text, opts, state);
+    parsed = state.parsed;
+  };
+  const onRaw = (text: string): void => {
+    if (opts.format === "raw") {
+      process.stdout.write(`${text}\n`);
+    }
+  };
+
+  activeAppServerRuns += 1;
+  syncSignalHandlers();
+  try {
+    try {
+      await startAppServer();
+    } catch (error) {
+      if (process.env[CODEX_TRANSPORT_ENV] === CODEX_TRANSPORT_EXEC) {
+        throw error;
+      }
+      throw new CodexAppServerFallbackError(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    const result = await runCodexTurn(prompt, opts, {
+      onParsed,
+      onRaw,
+    });
+    return { ...result, parsed: result.parsed || parsed };
+  } catch (error) {
+    if (
+      process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC &&
+      error instanceof CodexAppServerFallbackError
+    ) {
+      if (!fallbackWarned) {
+        fallbackWarned = true;
+        console.error(
+          "[loop] codex app-server transport failed. Falling back to `codex exec --json`."
+        );
+      }
+      return runnerState.runLegacyAgent("codex", prompt, opts);
+    }
+    throw error;
+  } finally {
+    activeAppServerRuns -= 1;
+    syncSignalHandlers();
+  }
+};
+
+const runLegacyAgent = async (
   agent: Agent,
   prompt: string,
   opts: Options
@@ -174,38 +295,26 @@ export const runAgent = async (
   let stderr = "";
   let parsed = "";
   let pending = "";
-  let lastMessage = "";
-  let prettyCount = 0;
-
-  const writePretty = (text: string): void => {
-    if (opts.format !== "pretty") {
-      return;
-    }
-    if (!text.trim()) {
-      return;
-    }
-    if (prettyCount > 0) {
-      process.stdout.write("\n");
-    }
-    process.stdout.write(`${text}\n`);
-    prettyCount++;
-  };
+  let state = { parsed: "", prettyCount: 0, lastMessage: "" };
 
   const onLine = (line: string): void => {
     const message = eventMessage(line);
     if (message) {
-      if (message === lastMessage) {
-        return;
-      }
-
-      lastMessage = message;
-      parsed += `${parsed ? "\n" : ""}${message}`;
-      writePretty(message);
+      state = appendParsedLine(message, opts, state);
+      parsed = state.parsed;
       return;
     }
 
-    if (!line.trim().startsWith("{")) {
-      writePretty(line);
+    if (
+      !line.trim().startsWith("{") &&
+      opts.format === "pretty" &&
+      line.trim()
+    ) {
+      if (state.prettyCount > 0) {
+        process.stdout.write("\n");
+      }
+      process.stdout.write(`${line}\n`);
+      state.prettyCount += 1;
     }
   };
 
@@ -242,4 +351,34 @@ export const runAgent = async (
     activeChildren.delete(proc);
     syncSignalHandlers();
   }
+};
+
+const defaultRunLegacyAgent: LegacyAgentRunner = (
+  agent: Agent,
+  prompt: string,
+  opts: Options
+): Promise<RunResult> => runLegacyAgent(agent, prompt, opts);
+
+export const runnerInternals = {
+  reset(): void {
+    runnerState.useAppServer = () => useAppServer();
+    runnerState.runLegacyAgent = defaultRunLegacyAgent;
+  },
+  setUseAppServer(next: () => boolean): void {
+    runnerState.useAppServer = next;
+  },
+  setLegacyAgent(next: LegacyAgentRunner): void {
+    runnerState.runLegacyAgent = next;
+  },
+};
+
+export const runAgent = (
+  agent: Agent,
+  prompt: string,
+  opts: Options
+): Promise<RunResult> => {
+  if (agent === "codex") {
+    return runCodexAgent(prompt, opts);
+  }
+  return runLegacyAgent(agent, prompt, opts);
 };

@@ -29,6 +29,11 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 - Create a GitHub fine-grained personal access token
 - Once you are done, take a snapshot of your "golden image" (e.g. `lume clone`)
 - Now you can even set up Tailscale to SSH remotely to your sandbox
+- By default, `loop` uses the Codex App Server transport (`codex app-server`) to keep a single session alive.
+- Set `CODEX_TRANSPORT=exec` to force the legacy `codex exec --json` path.
+  - Use `exec` when app-server compatibility problems are expected; `loop` will print:
+    `[loop] codex app-server transport failed. Falling back to \`codex exec --json\`.` once per session, and continue with the legacy path.
+  - To permanently force legacy mode for all runs, keep `CODEX_TRANSPORT=exec` set in your environment.
 
 ## Requirements
 
