@@ -53,6 +53,29 @@ test("runDraftPrStep prompts model to create draft PR", async () => {
   expect(passedOpts).toBe(opts);
 });
 
+test("runDraftPrStep prompts model to send a follow-up commit when PR exists", async () => {
+  const { runAgentMock, runDraftPrStep } = await loadRunDraftPrStep(
+    async () => ({
+      combined: "",
+      exitCode: 0,
+      parsed: "",
+    })
+  );
+
+  const opts = makeOptions();
+  await runDraftPrStep("Implement feature X", opts, true);
+
+  const [, prompt] = runAgentMock.mock.calls[0] as [
+    Options["agent"],
+    string,
+    Options,
+  ];
+
+  expect(prompt).toContain("A PR already exists for this branch");
+  expect(prompt).toContain("follow-up commit");
+  expect(prompt).not.toContain("gh pr create --draft");
+});
+
 test("runDraftPrStep throws when model exits non-zero", async () => {
   const { runDraftPrStep } = await loadRunDraftPrStep(async () => ({
     combined: "",

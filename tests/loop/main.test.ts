@@ -38,11 +38,12 @@ const loadRunLoop = async (mocks: {
   runAgent?: () => Promise<RunResult>;
   runDraftPrStep?: () => Promise<undefined>;
   runReview?: () => Promise<ReviewResult>;
+  question?: () => Promise<string>;
 }) => {
   mock.module("node:readline/promises", () => ({
     createInterface: mock(() => ({
       close: mock(() => undefined),
-      question: mock(async () => ""),
+      question: mock(async () => mocks.question?.() ?? ""),
     })),
   }));
   mock.module("../../src/loop/prompts", () => ({
@@ -104,7 +105,43 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
 
   expect(runAgent).toHaveBeenCalledTimes(1);
   expect(runReview).toHaveBeenCalledTimes(1);
-  expect(runDraftPrStep).toHaveBeenCalledWith("Ship feature", opts);
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(
+    1,
+    "Ship feature",
+    opts,
+    false
+  );
+});
+
+test("runLoop uses follow-up commit prompt after a PR is already created", async () => {
+  const answers = ["Update docs", ""];
+  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+    resolveReviewers: () => ["codex", "claude"],
+    runAgent: async () => makeRunResult("<done/>"),
+    runReview: async () => ({
+      approved: true,
+      consensusFail: false,
+      notes: "",
+    }),
+    question: async () => answers.shift() ?? "",
+  });
+
+  await runLoop("Ship feature", makeOptions({ review: "claudex" }));
+
+  expect(runAgent).toHaveBeenCalledTimes(2);
+  expect(runReview).toHaveBeenCalledTimes(2);
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(
+    1,
+    "Ship feature",
+    expect.any(Object),
+    false
+  );
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(
+    2,
+    "Ship feature\n\nFollow-up:\nUpdate docs",
+    expect.any(Object),
+    true
+  );
 });
 
 test("runLoop forwards consensus review notes into the next iteration prompt", async () => {

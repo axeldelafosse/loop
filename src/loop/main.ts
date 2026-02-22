@@ -9,7 +9,8 @@ import { hasSignal } from "./utils";
 const runIterations = async (
   task: string,
   opts: Options,
-  reviewers: string[]
+  reviewers: string[],
+  hasExistingPr = false
 ): Promise<boolean> => {
   let reviewNotes = "";
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
@@ -43,7 +44,7 @@ const runIterations = async (
     }
     const review = await runReview(reviewers, task, opts);
     if (review.approved) {
-      await runDraftPrStep(task, opts);
+      await runDraftPrStep(task, opts, hasExistingPr);
       console.log(
         `\n[loop] done signal "${opts.doneSignal}" detected and review passed, stopping.`
       );
@@ -70,13 +71,22 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
   const rl = interactive
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;
+  let hasExistingPr = false;
   let currentTask = task;
   while (true) {
-    const done = await runIterations(currentTask, opts, reviewers);
+    const done = await runIterations(
+      currentTask,
+      opts,
+      reviewers,
+      hasExistingPr
+    );
     if (!done) {
       console.log(
         `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
       );
+    }
+    if (reviewers.length > 0 && done) {
+      hasExistingPr = true;
     }
     if (!rl) {
       return;
