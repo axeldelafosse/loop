@@ -28,6 +28,7 @@ test("buildWorkPrompt keeps task, optional sections, and done instruction", () =
   expect(prompt).toContain(
     'append "<promise>DONE</promise>" on its own final line.'
   );
+  expect(prompt).toContain("worktree isolation");
 });
 
 test("buildWorkPrompt does not duplicate proof when task already contains it", () => {
@@ -52,5 +53,6 @@ test("buildReviewPrompt includes pass and fail instructions and verification", (
   expect(prompt).toContain(`end with "${REVIEW_FAIL}" on its own final line`);
   expect(prompt).toContain(`end with "${REVIEW_PASS}" on its own final line`);
   expect(prompt).toContain("Proof requirements:\nmust pass ci");
+  expect(prompt).toContain("worktree isolation");
   expect(prompt).toContain('Do not use "<done/>" in your final line.');
 });

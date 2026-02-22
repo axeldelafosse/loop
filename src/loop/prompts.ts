@@ -1,6 +1,8 @@
 import { REVIEW_FAIL, REVIEW_PASS } from "./constants";
 
 const NEWLINE_RE = /\r?\n/;
+const SPAWN_TEAM_WITH_WORKTREE_ISOLATION =
+  "Spawn a team of agents with worktree isolation.";
 
 const hasProofInTask = (task: string, proof: string): boolean => {
   const proofLines = proof
@@ -47,7 +49,7 @@ export const buildWorkPrompt = (
   }
 
   parts.push(
-    `Spawn a team of agents. When all work is verified and once you have a proof that the task is completed, append "${doneSignal}" on its own final line.`
+    `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} When all work is verified and once you have a proof that the task is completed, append "${doneSignal}" on its own final line.`
   );
   return parts.join("\n\n");
 };
@@ -71,7 +73,7 @@ export const buildReviewPrompt = (
     `If the work is complete, end with "${REVIEW_PASS}" on its own final line.`
   );
   parts.push(
-    `Spawn a team of agents. Do not use "${doneSignal}" in your final line.`
+    `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Do not use "${doneSignal}" in your final line.`
   );
   return parts.join("\n\n");
 };
