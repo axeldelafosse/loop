@@ -349,6 +349,9 @@ test("handleManualUpdateCommand stages update with correct metadata", async () =
     configurable: true,
   });
 
+  const binaryData = "fake-binary-data";
+  const expectedHash = createHash("sha256").update(binaryData).digest("hex");
+
   const fetchMock = mock((...args: unknown[]) => {
     const url = String(args[0]);
     if (url.includes("api.github.com")) {
@@ -360,11 +363,18 @@ test("handleManualUpdateCommand stages update with correct metadata", async () =
               name: assetName,
               browser_download_url: "https://example.com/loop-binary",
             },
+            {
+              name: `${assetName}.sha256`,
+              browser_download_url: "https://example.com/loop-binary.sha256",
+            },
           ],
         })
       );
     }
-    return Promise.resolve(new Response("fake-binary-data"));
+    if (url.includes(".sha256")) {
+      return Promise.resolve(new Response(`${expectedHash}  ${assetName}\n`));
+    }
+    return Promise.resolve(new Response(binaryData));
   });
   globalThis.fetch = fetchMock as typeof fetch;
 
@@ -504,17 +514,35 @@ test("update verifies matching checksum", async () => {
   });
   globalThis.fetch = fetchMock as typeof fetch;
 
-  console.log = mock(() => undefined);
-  console.error = mock(() => undefined);
+  const logMock = mock(() => undefined);
+  const errorMock = mock(() => undefined);
+  console.log = logMock;
+  console.error = errorMock;
 
   try {
     const { handleManualUpdateCommand } = await import(
       `../../src/loop/update?checksum=${Date.now()}`
     );
-    await handleManualUpdateCommand(["update"]);
+    expect(await handleManualUpdateCommand(["update"])).toBe(true);
 
     expect(existsSync(STAGED_BINARY)).toBe(true);
     expect(existsSync(METADATA_FILE)).toBe(true);
+    expect(readFileSync(STAGED_BINARY, "utf-8")).toBe(binaryData);
+    const metadata = JSON.parse(readFileSync(METADATA_FILE, "utf-8"));
+    expect(metadata.targetVersion).toBe("99.0.0");
+    expect(metadata.sourceUrl).toBe("https://example.com/loop-binary");
+    expect(metadata.downloadedAt).toBeTruthy();
+    expect(errorMock).not.toHaveBeenCalled();
+    const logMessages = logMock.mock.calls.map((call) => String(call[0]));
+    expect(
+      logMessages.some((msg) => msg.includes("[loop] downloading v99.0.0..."))
+    ).toBe(true);
+    expect(
+      logMessages.some((msg) =>
+        msg.includes("[loop] v99.0.0 staged — will apply on next startup")
+      )
+    ).toBe(true);
+    expect(fetchMock.mock.calls).toHaveLength(3);
   } finally {
     Object.defineProperty(process, "execPath", {
       value: originalExecPath,
@@ -577,20 +605,33 @@ test("update rejects mismatched checksum", async () => {
   globalThis.fetch = fetchMock as typeof fetch;
 
   const errorMock = mock(() => undefined);
-  console.log = mock(() => undefined);
+  const logMock = mock(() => undefined);
   console.error = errorMock;
+  console.log = logMock;
 
   try {
     const { handleManualUpdateCommand } = await import(
       `../../src/loop/update?badchecksum=${Date.now()}`
     );
-    await handleManualUpdateCommand(["update"]);
+    await expect(handleManualUpdateCommand(["update"])).rejects.toThrow(
+      "Checksum mismatch"
+    );
 
     const errorCalls = errorMock.mock.calls.map((c) => String(c[0]));
     expect(errorCalls.some((msg) => msg.includes("Checksum mismatch"))).toBe(
       true
     );
+    expect(
+      errorCalls.some((msg) =>
+        msg.includes("[loop] update failed: Checksum mismatch")
+      )
+    ).toBe(true);
     expect(existsSync(STAGED_BINARY)).toBe(false);
+    expect(existsSync(METADATA_FILE)).toBe(false);
+    const logMessages = logMock.mock.calls.map((call) => String(call[0]));
+    expect(logMessages.some((msg) => msg.includes("v99.0.0 staged"))).toBe(
+      false
+    );
   } finally {
     Object.defineProperty(process, "execPath", {
       value: originalExecPath,
@@ -608,7 +649,7 @@ test("update rejects mismatched checksum", async () => {
   }
 });
 
-test("update warns when no checksum available", async () => {
+test("update rejects when no checksum available", async () => {
   const osName = process.platform === "darwin" ? "macos" : "linux";
   const assetName = `loop-${osName}-${process.arch}`;
 
@@ -642,20 +683,27 @@ test("update warns when no checksum available", async () => {
   globalThis.fetch = fetchMock as typeof fetch;
 
   const errorMock = mock(() => undefined);
-  console.log = mock(() => undefined);
+  const logMock = mock(() => undefined);
+  console.log = logMock;
   console.error = errorMock;
 
   try {
     const { handleManualUpdateCommand } = await import(
       `../../src/loop/update?nochecksum=${Date.now()}`
     );
-    await handleManualUpdateCommand(["update"]);
+    await expect(handleManualUpdateCommand(["update"])).rejects.toThrow(
+      "No .sha256 checksum available"
+    );
 
     const errorCalls = errorMock.mock.calls.map((c) => String(c[0]));
     expect(
-      errorCalls.some((msg) => msg.includes("no .sha256 checksum available"))
+      errorCalls.some((msg) =>
+        msg.includes("refusing to install unverified binary")
+      )
     ).toBe(true);
-    expect(existsSync(STAGED_BINARY)).toBe(true);
+    expect(existsSync(STAGED_BINARY)).toBe(false);
+    expect(existsSync(METADATA_FILE)).toBe(false);
+    expect(fetchMock.mock.calls).toHaveLength(2);
   } finally {
     Object.defineProperty(process, "execPath", {
       value: originalExecPath,

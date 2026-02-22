@@ -112,11 +112,37 @@ jobs:
           }
           throw "Missing build output file"
 
+      - name: Generate SHA256 checksum (Unix)
+        if: runner.os != 'Windows'
+        run: shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+
+      - name: Generate SHA256 checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 ${{ matrix.asset_name }}).Hash.ToLower()
+          "$hash  ${{ matrix.asset_name }}" | Out-File -Encoding ascii ${{ matrix.asset_name }}.sha256
+
+      - name: Verify checksum file (Unix)
+        if: runner.os != 'Windows'
+        run: shasum -a 256 -c ${{ matrix.asset_name }}.sha256
+
+      - name: Verify checksum file (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $line = Get-Content ${{ matrix.asset_name }}.sha256
+          $expected = ($line -split '\s+')[0]
+          $actual = (Get-FileHash -Algorithm SHA256 ${{ matrix.asset_name }}).Hash.ToLower()
+          if ($expected -ne $actual) { throw "Checksum verification failed: expected $expected, got $actual" }
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
-          files: ${{ matrix.asset_name }}
+          files: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.asset_name }}.sha256
 
   create-release:
     needs: meta

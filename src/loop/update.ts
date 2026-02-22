@@ -171,8 +171,8 @@ const downloadAndStage = async (
   if (checksumUrl) {
     await verifyChecksum(buf, checksumUrl);
   } else {
-    console.error(
-      "[loop] warning: no .sha256 checksum available, skipping verification"
+    throw new Error(
+      "No .sha256 checksum available — refusing to install unverified binary"
     );
   }
 
@@ -273,6 +273,7 @@ export const handleManualUpdateCommand = async (
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`[loop] update failed: ${msg}`);
+    throw new Error(`[loop] update failed: ${msg}`);
   }
   return true;
 };
