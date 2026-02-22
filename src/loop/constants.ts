@@ -1,11 +1,13 @@
+import pkg from "../../package.json";
 import type { ValueFlag } from "./types";
 
 export const DEFAULT_DONE_SIGNAL = "<promise>DONE</promise>";
 export const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
 export const DEFAULT_CLAUDE_MODEL = "opus";
+export const LOOP_VERSION = pkg.version;
 
 export const HELP = `
-loop - meta agent loop runner
+loop - v${LOOP_VERSION} - meta agent loop runner
 
 Usage:
   loop                              Open live panel for running claude/codex instances
@@ -23,6 +25,7 @@ Options:
   --review [claude|codex|claudex]   Review on done (default: claudex)
   --tmux                            Run in a detached tmux session (name: repo-loop-X)
   --worktree                        Create and run in a fresh git worktree (name: repo-loop-X)
+  -v, --version                     Show loop version
   -h, --help                        Show this help
 
 Auto-update:

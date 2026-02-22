@@ -3,9 +3,13 @@ import { parseArgs } from "../../src/loop/args";
 import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_DONE_SIGNAL,
+  LOOP_VERSION,
 } from "../../src/loop/constants";
 
 const ORIGINAL_LOOP_CODEX_MODEL = process.env.LOOP_CODEX_MODEL;
+const originalExit = process.exit;
+const originalLog = console.log;
+
 const clearModelEnv = (): void => {
   Reflect.deleteProperty(process.env, "LOOP_CODEX_MODEL");
 };
@@ -20,6 +24,42 @@ const restoreModelEnv = (): void => {
 
 afterEach(() => {
   restoreModelEnv();
+  process.exit = originalExit;
+  console.log = originalLog;
+});
+
+test("parseArgs prints version and exits when --version is passed", () => {
+  let code: number | undefined;
+  console.log = ((_: string) => {
+    expect(_).toBe(`loop v${LOOP_VERSION}`);
+  }) as typeof console.log;
+  process.exit = ((exitCode?: number): never => {
+    code = exitCode;
+    throw new Error("exit");
+  }) as typeof process.exit;
+
+  expect(() => {
+    parseArgs(["--version"]);
+  }).toThrow("exit");
+
+  expect(code).toBe(0);
+});
+
+test("parseArgs prints version and exits when -v is passed", () => {
+  let code: number | undefined;
+  console.log = ((_: string) => {
+    expect(_).toBe(`loop v${LOOP_VERSION}`);
+  }) as typeof console.log;
+  process.exit = ((exitCode?: number): never => {
+    code = exitCode;
+    throw new Error("exit");
+  }) as typeof process.exit;
+
+  expect(() => {
+    parseArgs(["-v"]);
+  }).toThrow("exit");
+
+  expect(code).toBe(0);
 });
 
 test("parseArgs throws when required proof is missing", () => {

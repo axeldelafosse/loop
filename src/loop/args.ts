@@ -3,6 +3,7 @@ import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_DONE_SIGNAL,
   HELP,
+  LOOP_VERSION,
   VALUE_FLAGS,
 } from "./constants";
 import type { Agent, Format, Options, ReviewMode, ValueFlag } from "./types";
@@ -99,6 +100,11 @@ const consumeArg = (
   positional: string[]
 ): { nextIndex: number; stop: boolean } => {
   const arg = argv[index];
+
+  if (arg === "-v" || arg === "--version") {
+    console.log(`loop v${LOOP_VERSION}`);
+    process.exit(0);
+  }
 
   if (arg === "-h" || arg === "--help") {
     console.log(HELP);
