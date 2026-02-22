@@ -110,12 +110,11 @@ source ~/.zshrc
 Example release:
 
 ```bash
-# bump version
-npm version patch
+# bump patch version and push commit + tag
+bun run release:patch
 
-# push commit + tag created by npm version
-git push origin main
-git push --tags
+# equivalent to:
+# npm version patch && git push --follow-tags
 ```
 
 ## Auto-update

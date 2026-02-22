@@ -6,6 +6,7 @@
   "scripts": {
     "build": "bun build --compile --outfile loop src/loop.ts",
     "install:global": "bun run build && bun run src/install.ts",
+    "release:patch": "npm version patch && git push --follow-tags",
     "check": "ultracite check",
     "fix": "ultracite fix"
   },
