@@ -25,6 +25,7 @@ const makeRunResult = (
 const noopReview = async (): Promise<ReviewResult> => ({
   approved: true,
   consensusFail: false,
+  failureCount: 0,
   notes: "",
 });
 
@@ -92,17 +93,15 @@ test("runLoop stops immediately on done signal when review is disabled", async (
   expect(runDraftPrStep).not.toHaveBeenCalled();
 });
 
-test("runLoop stops on done signal even if agent exits non-zero when review is disabled", async () => {
-  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+test("runLoop throws when agent exits non-zero even with done signal (no review)", async () => {
+  const { runLoop } = await loadRunLoop({
     resolveReviewers: () => [],
     runAgent: async () => makeRunResult("<done/>", "", 1),
   });
 
-  await runLoop("Ship feature", makeOptions({ review: undefined }));
-
-  expect(runAgent).toHaveBeenCalledTimes(1);
-  expect(runReview).not.toHaveBeenCalled();
-  expect(runDraftPrStep).not.toHaveBeenCalled();
+  await expect(
+    runLoop("Ship feature", makeOptions({ review: undefined }))
+  ).rejects.toThrow("exited with code 1");
 });
 
 test("runLoop creates draft PR when done signal is reviewed and approved", async () => {
@@ -113,6 +112,7 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
     runReview: async () => ({
       approved: true,
       consensusFail: false,
+      failureCount: 0,
       notes: "",
     }),
   });
@@ -121,50 +121,33 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
 
   expect(runAgent).toHaveBeenCalledTimes(1);
   expect(runReview).toHaveBeenCalledTimes(1);
-  expect(runDraftPrStep).toHaveBeenNthCalledWith(
-    1,
-    "Ship feature",
-    opts,
-    false
-  );
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(1, "Ship feature", opts);
 });
 
-test("runLoop creates draft PR when done signal is reviewed and approved even if agent exits non-zero", async () => {
-  const opts = makeOptions({ review: "claudex" });
-  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+test("runLoop throws when agent exits non-zero even with done signal (with review)", async () => {
+  const { runLoop, runReview, runDraftPrStep } = await loadRunLoop({
     resolveReviewers: () => ["codex", "claude"],
     runAgent: async () => makeRunResult("<done/>", "", 1),
-    runReview: async () => ({
-      approved: true,
-      consensusFail: false,
-      notes: "",
-    }),
   });
 
-  await runLoop("Ship feature", opts);
-
-  expect(runAgent).toHaveBeenCalledTimes(1);
-  expect(runReview).toHaveBeenCalledTimes(1);
-  expect(runDraftPrStep).toHaveBeenCalledTimes(1);
-  expect(runDraftPrStep).toHaveBeenNthCalledWith(
-    1,
-    "Ship feature",
-    opts,
-    false
+  await expect(runLoop("Ship feature", makeOptions())).rejects.toThrow(
+    "exited with code 1"
   );
+  expect(runReview).not.toHaveBeenCalled();
+  expect(runDraftPrStep).not.toHaveBeenCalled();
 });
 
-test("runLoop uses follow-up commit prompt after a PR is already created", async () => {
-  const answers = ["Update docs", ""];
-  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
-    resolveReviewers: () => ["codex", "claude"],
-    runAgent: async () => makeRunResult("<done/>"),
-    runReview: async () => ({
-      approved: true,
-      consensusFail: false,
-      notes: "",
-    }),
-    question: async () => answers.shift() ?? "",
+test("runLoop prompts for follow-up in interactive mode on max iterations", async () => {
+  let callCount = 0;
+  const { runLoop, runAgent } = await loadRunLoop({
+    resolveReviewers: () => [],
+    runAgent: () => {
+      callCount++;
+      return Promise.resolve(
+        callCount <= 2 ? makeRunResult("working") : makeRunResult("<done/>")
+      );
+    },
+    question: async () => (callCount <= 2 ? "Do more work" : ""),
   });
 
   const originalIsTty = process.stdin.isTTY;
@@ -173,7 +156,10 @@ test("runLoop uses follow-up commit prompt after a PR is already created", async
     value: true,
   });
   try {
-    await runLoop("Ship feature", makeOptions({ review: "claudex" }));
+    await runLoop(
+      "Ship feature",
+      makeOptions({ maxIterations: 2, review: undefined })
+    );
   } finally {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
@@ -181,20 +167,31 @@ test("runLoop uses follow-up commit prompt after a PR is already created", async
     });
   }
 
-  expect(runAgent).toHaveBeenCalledTimes(2);
-  expect(runReview).toHaveBeenCalledTimes(2);
-  expect(runDraftPrStep).toHaveBeenNthCalledWith(
-    1,
-    "Ship feature",
-    expect.any(Object),
-    false
-  );
-  expect(runDraftPrStep).toHaveBeenNthCalledWith(
-    2,
-    "Ship feature\n\nFollow-up:\nUpdate docs",
-    expect.any(Object),
-    true
-  );
+  expect(runAgent).toHaveBeenCalledTimes(3);
+});
+
+test("runLoop exits immediately on done signal in interactive mode", async () => {
+  const { runLoop, runAgent } = await loadRunLoop({
+    resolveReviewers: () => [],
+    runAgent: async () => makeRunResult("<done/>"),
+    question: async () => "should not be called",
+  });
+
+  const originalIsTty = process.stdin.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  try {
+    await runLoop("Ship feature", makeOptions({ review: undefined }));
+  } finally {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: originalIsTty,
+    });
+  }
+
+  expect(runAgent).toHaveBeenCalledTimes(1);
 });
 
 test("runLoop forwards consensus review notes into the next iteration prompt", async () => {
@@ -221,6 +218,7 @@ test("runLoop forwards consensus review notes into the next iteration prompt", a
     runReview: async () => ({
       approved: false,
       consensusFail: true,
+      failureCount: 2,
       notes: "[codex] Fix tests.\n\n[claude] Improve docs.",
     }),
   });
@@ -235,7 +233,7 @@ test("runLoop forwards consensus review notes into the next iteration prompt", a
   expect(runReview).toHaveBeenCalledTimes(1);
 });
 
-test("runLoop forwards single-review fallback notes into the next iteration prompt", async () => {
+test("runLoop forwards single-review notes into the next iteration prompt", async () => {
   const promptNotes: string[] = [];
   let runCount = 0;
 
@@ -259,7 +257,8 @@ test("runLoop forwards single-review fallback notes into the next iteration prom
     runReview: async () => ({
       approved: false,
       consensusFail: false,
-      notes: "",
+      failureCount: 1,
+      notes: "[codex] Reviewer found more work to do.",
     }),
   });
 
@@ -267,7 +266,7 @@ test("runLoop forwards single-review fallback notes into the next iteration prom
 
   expect(buildWorkPrompt).toHaveBeenCalledTimes(2);
   expect(promptNotes[0]).toBe("");
-  expect(promptNotes[1]).toBe("Reviewer found more work to do.");
+  expect(promptNotes[1]).toBe("[codex] Reviewer found more work to do.");
 });
 
 test("runLoop stops after max iterations when done signal is never found", async () => {

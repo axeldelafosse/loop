@@ -32,5 +32,6 @@ export interface RunResult {
 export interface ReviewResult {
   approved: boolean;
   consensusFail: boolean;
+  failureCount: number;
   notes: string;
 }

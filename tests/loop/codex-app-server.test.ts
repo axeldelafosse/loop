@@ -113,12 +113,43 @@ const installSpawn = (appServerModule: AppServerModule): void => {
   );
 };
 
+const installConnectWs = (appServerModule: AppServerModule): void => {
+  appServerModule.codexAppServerInternals.setConnectWsFn(() => {
+    const client: import("../../src/loop/ws-client").WsClient = {
+      onmessage: undefined,
+      onclose: undefined,
+      send: (data: string) => {
+        for (const raw of data.split("\n")) {
+          if (!raw.trim()) {
+            continue;
+          }
+          const proc = processes.at(-1);
+          if (proc) {
+            proc.writes.push(raw);
+          }
+          const request = JSON.parse(raw) as RequestFrame;
+          makeStreamResponse(request, (frame) => {
+            queueMicrotask(() => {
+              client.onmessage?.(JSON.stringify(frame));
+            });
+          });
+        }
+      },
+      close: () => {
+        // noop for tests
+      },
+    };
+    return Promise.resolve(client);
+  });
+};
+
 const getModule = async (): Promise<AppServerModule> => {
   if (!modulePromise) {
     modulePromise = import("../../src/loop/codex-app-server");
   }
   moduleExports = await modulePromise;
   installSpawn(moduleExports);
+  installConnectWs(moduleExports);
   return moduleExports;
 };
 
@@ -146,6 +177,7 @@ const resetState = async (): Promise<void> => {
   processes = [];
   currentHandler = noopRequestHandler;
   appServer.codexAppServerInternals.restoreSpawnFn();
+  appServer.codexAppServerInternals.restoreConnectWsFn();
 };
 
 afterEach(async () => {
