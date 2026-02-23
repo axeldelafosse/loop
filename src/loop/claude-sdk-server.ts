@@ -531,18 +531,16 @@ class ClaudeSdkClient {
   }
 
   private handleUnexpectedClose(): void {
-    this.ws = undefined;
-    this.ready = false;
-    this.started = false;
-    this.sessionId = "";
+    const state = this.turn;
+    this.turn = undefined;
     this.broadcastToFrontends(
       `${JSON.stringify({ type: "status", text: "claude code disconnected" })}\n`
     );
-    if (this.turn) {
-      const state = this.turn;
-      this.turn = undefined;
-      state.reject(new Error("claude sdk connection closed unexpectedly"));
-    }
+    state?.reject(new Error("claude sdk connection closed unexpectedly"));
+    this.ws = undefined;
+    void this.cleanup().catch(() => {
+      // ignore cleanup errors after unexpected websocket close
+    });
   }
 }
 
