@@ -538,7 +538,7 @@ class ClaudeSdkClient {
     );
     state?.reject(new Error("claude sdk connection closed unexpectedly"));
     this.ws = undefined;
-    void this.cleanup().catch(() => {
+    this.cleanup().catch(() => {
       // ignore cleanup errors after unexpected websocket close
     });
   }

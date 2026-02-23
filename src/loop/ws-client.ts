@@ -9,6 +9,7 @@ type MessageHandler = (data: string) => void;
 type CloseHandler = () => void;
 
 const WS_OPCODE_TEXT = 0x01;
+const WS_OPCODE_CONTINUATION = 0x00;
 const WS_OPCODE_CLOSE = 0x08;
 const WS_OPCODE_PING = 0x09;
 const WS_OPCODE_PONG = 0x0a;
@@ -119,6 +120,7 @@ export const connectWs = (url: string): Promise<WsClient> => {
 
     const processFrames = (): void => {
       while (frameBuffer.length >= 2) {
+        const fin = (frameBuffer[0] & WS_FIN_BIT) !== 0;
         const opcode = frameBuffer[0] & 0x0f;
         const masked = (frameBuffer[1] & WS_MASK_BIT) !== 0;
         let payloadLen = frameBuffer[1] & 0x7f;
@@ -155,6 +157,17 @@ export const connectWs = (url: string): Promise<WsClient> => {
         }
 
         frameBuffer = frameBuffer.slice(offset + payloadLen);
+
+        if (!fin || opcode === WS_OPCODE_CONTINUATION) {
+          if (!closed) {
+            closed = true;
+            process.stderr.write(
+              "[loop] ws-client: fragmented frames are unsupported\n"
+            );
+            socket?.end(encodeCloseFrame());
+          }
+          return;
+        }
 
         if (opcode === WS_OPCODE_TEXT) {
           client.onmessage?.(new TextDecoder().decode(payload));
