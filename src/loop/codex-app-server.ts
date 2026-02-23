@@ -459,9 +459,20 @@ class AppServerClient {
 
   private async consumeFrames(proc: ReturnType<typeof spawn>): Promise<void> {
     await Promise.all([
-      this.consumeStream(proc.stdout, this.handleStdoutLine),
+      this.drainStream(proc.stdout),
       this.consumeStream(proc.stderr, this.handleStdErrLine),
     ]);
+  }
+
+  private async drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stream.getReader();
+    try {
+      while (!(await reader.read()).done) {
+        // drain only — all JSON-RPC goes through WebSocket
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   private async consumeStream(
