@@ -67,13 +67,16 @@ export const buildReviewPrompt = (
   parts.push(`Proof requirements:\n${proof.trim()}`);
 
   parts.push(
-    `If more work is needed, explain what to change and end with "${REVIEW_FAIL}" on its own final line.`
+    `If review is needed, end your response with exactly "${REVIEW_FAIL}" on the final non-empty line. Nothing may follow this line.`
   );
   parts.push(
-    `If the work is complete, end with "${REVIEW_PASS}" on its own final line.`
+    `If the work is complete, end with exactly "${REVIEW_PASS}" on the final non-empty line. No extra content after this line.`
   );
   parts.push(
-    `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Do not use "${doneSignal}" in your final line.`
+    "When reporting failures, include concrete file paths, commands, and code locations that must change."
+  );
+  parts.push(
+    `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} The final line must be one of the two review signals on its own line, with no surrounding comments or markdown, and it must not include "${doneSignal}".`
   );
   return parts.join("\n\n");
 };

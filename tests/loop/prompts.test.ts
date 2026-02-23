@@ -46,13 +46,27 @@ test("buildWorkPrompt keeps proof when only a substring appears in task", () => 
   expect(prompt).toContain("Proof requirements:\ntest");
 });
 
-test("buildReviewPrompt includes pass and fail instructions and verification", () => {
+test("buildReviewPrompt includes strict review signal instructions", () => {
   const prompt = buildReviewPrompt("  do task  ", "<done/>", "must pass ci");
 
   expect(prompt).toContain("Task:\ndo task");
-  expect(prompt).toContain(`end with "${REVIEW_FAIL}" on its own final line`);
-  expect(prompt).toContain(`end with "${REVIEW_PASS}" on its own final line`);
+  expect(prompt).toContain(
+    `If review is needed, end your response with exactly "${REVIEW_FAIL}"`
+  );
+  expect(prompt).toContain(
+    `If the work is complete, end with exactly "${REVIEW_PASS}"`
+  );
+  expect(prompt).toContain("final non-empty line");
+  expect(prompt).toContain("Nothing may follow this line.");
+  expect(prompt).toContain("No extra content after this line.");
+  expect(prompt).toContain(`"${REVIEW_PASS}"`);
+  expect(prompt).toContain(
+    "concrete file paths, commands, and code locations that must change."
+  );
   expect(prompt).toContain("Proof requirements:\nmust pass ci");
   expect(prompt).toContain("worktree isolation");
-  expect(prompt).toContain('Do not use "<done/>" in your final line.');
+  expect(prompt).toContain("must not include");
+  expect(prompt).toContain(
+    "The final line must be one of the two review signals"
+  );
 });

@@ -1,5 +1,11 @@
 import { spawn } from "bun";
 import {
+  hasClaudeSdkProcess,
+  interruptClaudeSdk,
+  runClaudeTurn,
+  startClaudeSdk,
+} from "./claude-sdk-server";
+import {
   CODEX_TRANSPORT_ENV,
   CODEX_TRANSPORT_EXEC,
   CodexAppServerFallbackError,
@@ -34,6 +40,7 @@ const SIGNAL_EXIT_CODES: Record<ExitSignal, number> = {
 
 const activeChildren = new Set<ReturnType<typeof spawn>>();
 let activeAppServerRuns = 0;
+let activeClaudeSdkRuns = 0;
 let watchingSignals = false;
 let fallbackWarned = false;
 const runnerState: RunnerState = {
@@ -50,19 +57,26 @@ const killChildren = (signal: ExitSignal): void => {
 const onSigint = (): void => {
   killChildren("SIGINT");
   interruptAppServer("SIGINT");
+  interruptClaudeSdk("SIGINT");
   process.exit(SIGNAL_EXIT_CODES.SIGINT);
 };
 
 const onSigterm = (): void => {
   killChildren("SIGTERM");
   interruptAppServer("SIGTERM");
+  interruptClaudeSdk("SIGTERM");
   process.exit(SIGNAL_EXIT_CODES.SIGTERM);
 };
 
 const syncSignalHandlers = (): void => {
   const hasAppServerWork = hasAppServerProcess();
+  const hasClaudeSdkWork = hasClaudeSdkProcess();
   const hasWork =
-    activeChildren.size > 0 || activeAppServerRuns > 0 || hasAppServerWork;
+    activeChildren.size > 0 ||
+    activeAppServerRuns > 0 ||
+    activeClaudeSdkRuns > 0 ||
+    hasAppServerWork ||
+    hasClaudeSdkWork;
   if (hasWork && !watchingSignals) {
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
@@ -370,6 +384,43 @@ export const runnerInternals = {
   },
 };
 
+const runClaudeAgent = async (
+  prompt: string,
+  opts: Options
+): Promise<RunResult> => {
+  let parsed = "";
+  let state = { parsed: "", prettyCount: 0, lastMessage: "" };
+  const onParsed = (text: string): void => {
+    state = appendParsedLine(text, opts, state);
+    parsed = state.parsed;
+  };
+  const onRaw = (text: string): void => {
+    if (opts.format === "raw") {
+      process.stdout.write(`${text}\n`);
+    }
+  };
+  const onDelta = (text: string): void => {
+    if (opts.format === "pretty") {
+      process.stdout.write(text);
+    }
+  };
+
+  activeClaudeSdkRuns += 1;
+  syncSignalHandlers();
+  try {
+    await startClaudeSdk();
+    const result = await runClaudeTurn(prompt, opts, {
+      onDelta,
+      onParsed,
+      onRaw,
+    });
+    return { ...result, parsed: result.parsed || parsed };
+  } finally {
+    activeClaudeSdkRuns -= 1;
+    syncSignalHandlers();
+  }
+};
+
 export const runAgent = (
   agent: Agent,
   prompt: string,
@@ -377,6 +428,9 @@ export const runAgent = (
 ): Promise<RunResult> => {
   if (agent === "codex") {
     return runCodexAgent(prompt, opts);
+  }
+  if (agent === "claude") {
+    return runClaudeAgent(prompt, opts);
   }
   return runLegacyAgent(agent, prompt, opts);
 };

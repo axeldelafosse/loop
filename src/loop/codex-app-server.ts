@@ -1,4 +1,5 @@
 import { spawn } from "bun";
+import { findFreePort } from "./ports";
 import type { Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
@@ -31,7 +32,10 @@ interface TurnState {
 }
 
 const APP_SERVER_CMD = "codex";
-const APP_SERVER_ARGS = ["app-server"];
+const APP_SERVER_BASE_PORT = 4500;
+const APP_SERVER_PORT_RANGE = 100;
+const WS_CONNECT_ATTEMPTS = 40;
+const WS_CONNECT_DELAY_MS = 150;
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
 const WAIT_TIMEOUT_MS = 600_000;
 
@@ -62,7 +66,14 @@ const METHODS_TRIGGERING_FALLBACK = new Set([
 ]);
 
 type SpawnFn = (...args: Parameters<typeof spawn>) => ReturnType<typeof spawn>;
+type ConnectWsFn = (url: string) => Promise<import("./ws-client").WsClient>;
+
 let spawnFn: SpawnFn = spawn;
+const defaultConnectWs: ConnectWsFn = async (url) => {
+  const { connectWs } = await import("./ws-client");
+  return connectWs(url);
+};
+let connectWsFn: ConnectWsFn = defaultConnectWs;
 
 const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
@@ -203,10 +214,17 @@ export const codexAppServerInternals = {
   restoreSpawnFn: (): void => {
     spawnFn = spawn;
   },
+  setConnectWsFn: (next: ConnectWsFn): void => {
+    connectWsFn = next;
+  },
+  restoreConnectWsFn: (): void => {
+    connectWsFn = defaultConnectWs;
+  },
 };
 
 class AppServerClient {
   private child: ReturnType<typeof spawn> | undefined;
+  private ws: import("./ws-client").WsClient | undefined;
   private closed = false;
   private started = false;
   private ready = false;
@@ -230,18 +248,38 @@ class AppServerClient {
     }
     this.started = true;
     try {
-      const child = spawnFn([APP_SERVER_CMD, ...APP_SERVER_ARGS], {
-        env: process.env,
-        stderr: "pipe",
-        stdin: "pipe",
-        stdout: "pipe",
-      });
+      const port = await this.findPort();
+      const listenUrl = `ws://0.0.0.0:${port}`;
+      const connectUrl = `ws://127.0.0.1:${port}`;
+      const child = spawnFn(
+        [APP_SERVER_CMD, "app-server", "--listen", listenUrl],
+        {
+          env: process.env,
+          stderr: "pipe",
+          stdin: "pipe",
+          stdout: "pipe",
+        }
+      );
       this.child = child;
       this.consumeFrames(child).finally(() => {
         if (!this.closed) {
           this.handleUnexpectedExit();
         }
       });
+      const ws = await this.connectWebSocket(connectUrl);
+      this.ws = ws;
+      ws.onmessage = (data) => {
+        for (const line of data.split("\n")) {
+          if (line.trim()) {
+            this.handleStdoutLine(line);
+          }
+        }
+      };
+      ws.onclose = () => {
+        if (!this.closed) {
+          this.handleUnexpectedExit();
+        }
+      };
       await this.sendRequest(METHOD_INITIALIZE, {
         clientInfo: {
           name: "loop",
@@ -252,6 +290,15 @@ class AppServerClient {
       });
       this.ready = true;
     } catch (error) {
+      const ws = this.ws;
+      this.ws = undefined;
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore close errors
+        }
+      }
       if (this.child) {
         this.child.kill("SIGTERM");
         this.child = undefined;
@@ -263,6 +310,30 @@ class AppServerClient {
         toError(error).message || "failed to start codex app-server"
       );
     }
+  }
+
+  private findPort(): Promise<number> {
+    return findFreePort(APP_SERVER_BASE_PORT, APP_SERVER_PORT_RANGE);
+  }
+
+  private async connectWebSocket(
+    url: string
+  ): Promise<import("./ws-client").WsClient> {
+    for (let i = 0; i < WS_CONNECT_ATTEMPTS; i++) {
+      try {
+        return await connectWsFn(url);
+      } catch {
+        if (i === WS_CONNECT_ATTEMPTS - 1) {
+          throw new CodexAppServerFallbackError(
+            "failed to connect to codex app-server WebSocket"
+          );
+        }
+        await new Promise((resolve) =>
+          setTimeout(resolve, WS_CONNECT_DELAY_MS)
+        );
+      }
+    }
+    throw new CodexAppServerFallbackError("unreachable");
   }
 
   runTurn(
@@ -288,6 +359,15 @@ class AppServerClient {
   async close(): Promise<void> {
     this.closed = true;
     this.failAll(new Error("codex app-server closed"));
+    const ws = this.ws;
+    this.ws = undefined;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore close errors
+      }
+    }
     if (!this.child) {
       this.started = false;
       this.ready = false;
@@ -300,12 +380,12 @@ class AppServerClient {
     this.started = false;
   }
 
-  private async ensureThread(): Promise<string> {
+  private async ensureThread(model: string): Promise<string> {
     if (this.threadId) {
       return this.threadId;
     }
     const response = await this.sendRequest(METHOD_THREAD_START, {
-      model: null,
+      model,
       approvalPolicy: "never",
       experimentalRawEvents: true,
       persistExtendedHistory: true,
@@ -333,7 +413,7 @@ class AppServerClient {
       throw new CodexAppServerFallbackError("codex app-server not running");
     }
 
-    const threadId = await this.ensureThread();
+    const threadId = await this.ensureThread(opts.model);
     const response = await this.sendRequest(METHOD_TURN_START, {
       threadId,
       input: buildInput(prompt),
@@ -379,9 +459,20 @@ class AppServerClient {
 
   private async consumeFrames(proc: ReturnType<typeof spawn>): Promise<void> {
     await Promise.all([
-      this.consumeStream(proc.stdout, this.handleStdoutLine),
+      this.drainStream(proc.stdout),
       this.consumeStream(proc.stderr, this.handleStdErrLine),
     ]);
+  }
+
+  private async drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stream.getReader();
+    try {
+      while (!(await reader.read()).done) {
+        // drain only — all JSON-RPC goes through WebSocket
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   private async consumeStream(
@@ -687,7 +778,7 @@ class AppServerClient {
   }
 
   private sendRequest(method: string, params: unknown): Promise<unknown> {
-    if (!this.child || this.closed) {
+    if (!(this.ws || this.child) || this.closed) {
       return Promise.reject(
         new CodexAppServerFallbackError("codex app-server not initialized")
       );
@@ -699,7 +790,7 @@ class AppServerClient {
       params,
     };
     try {
-      this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+      this.sendFrame(payload);
     } catch (error) {
       throw new CodexAppServerFallbackError(
         `codex app-server request "${method}" failed to write: ${
@@ -717,19 +808,28 @@ class AppServerClient {
     });
   }
 
+  private sendFrame(payload: Record<string, unknown>): void {
+    const data = `${JSON.stringify(payload)}\n`;
+    if (this.ws) {
+      this.ws.send(data);
+    } else if (this.child) {
+      this.child.stdin.write(data);
+    }
+  }
+
   private sendResponse(
     requestId: string,
     result: unknown,
     error: unknown
   ): void {
-    if (!this.child) {
+    if (!(this.ws || this.child)) {
       return;
     }
     const payload =
       error === undefined
         ? { id: requestId, result, jsonrpc: "2.0" }
         : { id: requestId, error, jsonrpc: "2.0" };
-    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+    this.sendFrame(payload);
   }
 
   private failAll(error: Error): void {
@@ -746,6 +846,15 @@ class AppServerClient {
 
   private handleUnexpectedExit(): void {
     this.child = undefined;
+    const ws = this.ws;
+    this.ws = undefined;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore close errors
+      }
+    }
     this.started = false;
     this.ready = false;
     this.threadId = undefined;
@@ -756,6 +865,10 @@ class AppServerClient {
 }
 
 let singleton: AppServerClient | undefined;
+
+process.on("exit", () => {
+  singleton?.process?.kill("SIGKILL");
+});
 
 const getClient = (): AppServerClient => {
   if (!singleton) {

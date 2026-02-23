@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { closeClaudeSdk } from "./loop/claude-sdk-server";
 import { closeAppServer } from "./loop/codex-app-server";
 import { cliDeps } from "./loop/deps";
 import { updateDeps } from "./loop/update-deps";
@@ -28,7 +29,7 @@ export const runCli = async (argv: string[]): Promise<void> => {
     const task = await cliDeps.resolveTask(opts);
     await cliDeps.runLoop(task, opts);
   } finally {
-    await closeAppServer();
+    await Promise.all([closeAppServer(), closeClaudeSdk()]);
   }
 };
 
