@@ -6,9 +6,15 @@ import {
   LOOP_VERSION,
   VALUE_FLAGS,
 } from "./constants";
-import type { Agent, Format, Options, ReviewMode, ValueFlag } from "./types";
+import type {
+  Agent,
+  Format,
+  Options,
+  PlanReviewMode,
+  ReviewMode,
+  ValueFlag,
+} from "./types";
 
-const REQUIRED_PROOF_ERROR = "Missing required --proof value.";
 const EMPTY_DONE_SIGNAL_ERROR = "Invalid --done value: cannot be empty";
 
 const parseAgent = (value: string): Agent => {
@@ -30,6 +36,13 @@ const parseReviewValue = (value: string): ReviewMode => {
     return value;
   }
   throw new Error(`Invalid --review value: ${value}`);
+};
+
+const parsePlanReviewValue = (value: string): PlanReviewMode => {
+  if (value === "other" || value === "claude" || value === "codex") {
+    return value;
+  }
+  throw new Error(`Invalid --review-plan value: ${value}`);
 };
 
 const applyValueFlag = (
@@ -101,6 +114,27 @@ const parseReviewArg = (
   return index;
 };
 
+const parsePlanReviewArg = (
+  argv: string[],
+  index: number,
+  opts: Options,
+  arg: string
+): number => {
+  if (arg.startsWith("--review-plan=")) {
+    opts.reviewPlan = parsePlanReviewValue(arg.slice("--review-plan=".length));
+    return index;
+  }
+
+  const next = argv[index + 1];
+  if (next === "other" || next === "claude" || next === "codex") {
+    opts.reviewPlan = next;
+    return index + 1;
+  }
+
+  opts.reviewPlan = "other";
+  return index;
+};
+
 const consumeArg = (
   argv: string[],
   index: number,
@@ -132,6 +166,13 @@ const consumeArg = (
   if (arg === "--review" || arg.startsWith("--review=")) {
     return {
       nextIndex: parseReviewArg(argv, index, opts, arg) + 1,
+      stop: false,
+    };
+  }
+
+  if (arg === "--review-plan" || arg.startsWith("--review-plan=")) {
+    return {
+      nextIndex: parsePlanReviewArg(argv, index, opts, arg) + 1,
       stop: false,
     };
   }
@@ -193,10 +234,6 @@ export const parseArgs = (argv: string[]): Options => {
       );
     }
     opts.promptInput = positional.join(" ");
-  }
-
-  if (!opts.proof) {
-    throw new Error(REQUIRED_PROOF_ERROR);
   }
 
   return opts;

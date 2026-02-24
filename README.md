@@ -135,12 +135,13 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)
 - `-p, --prompt <text|.md file>`: prompt text or a `.md` prompt file path. Plain text auto-creates `PLAN.md` first.
-- `--proof <text>`: required proof criteria for task completion
+- `--proof <text>`: optional proof criteria for task completion
 - `--codex-model <model>`: set the model passed to codex (`LOOP_CODEX_MODEL` can also set this by default)
 - `-m, --max-iterations <number>`: max loop count (default: infinite)
 - `-d, --done <signal>`: done signal string (default: `<promise>DONE</promise>`)
 - `--format <pretty|raw>`: output format (default: `pretty`)
 - `--review [claude|codex|claudex]`: run a review when done (default: `claudex`; bare `--review` also uses `claudex`). With `claudex`, both reviews run in parallel, then both comments are passed back to the original agent so it can decide what to address. If both reviews found the same issue, that is a stronger signal to fix it.
+- `--review-plan [other|claude|codex]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model).
 - `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects (auto-attaches when interactive). Session name format: `repo-loop-X`
 - `--worktree`: create and run inside a fresh git worktree + branch automatically. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help
@@ -154,8 +155,11 @@ loop --proof "Use {skill} to verify your changes"
 # two iteration, raw JSON/event output
 loop -m 2 --proof "Use {skill} to verify your changes" "Implement {feature}" --format raw
 
-# plain text prompt: auto-creates PLAN.md, then runs from PLAN.md
+# plain text prompt: auto-creates PLAN.md, then auto-reviews with the other model (default)
 loop --proof "Use {skill} to verify your changes" "Implement {feature}"
+
+# plain text prompt: override the plan reviewer
+loop --proof "Use {skill} to verify your changes" --review-plan claude "Implement {feature}"
 
 # run with claude
 loop --proof "Use {skill} to verify your changes" --agent claude --prompt PLAN.md

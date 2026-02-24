@@ -1,6 +1,6 @@
-import { buildPlanPrompt } from "./prompts";
+import { buildPlanPrompt, buildPlanReviewPrompt } from "./prompts";
 import { runAgent } from "./runner";
-import type { Options } from "./types";
+import type { Agent, Options, PlanReviewMode } from "./types";
 import { isFile, readPrompt } from "./utils";
 
 const PLAN_FILE = "PLAN.md";
@@ -10,6 +10,17 @@ const MARKDOWN_PATH_RE = /^[^\s]+\.md$/i;
 
 const isMarkdownInput = (input: string): boolean =>
   MARKDOWN_PATH_RE.test(input.trim());
+
+const resolvePlanReviewer = (
+  reviewPlan: PlanReviewMode | undefined,
+  agent: Agent
+): Agent => {
+  const mode = reviewPlan ?? "other";
+  if (mode === "other") {
+    return agent === "codex" ? "claude" : "codex";
+  }
+  return mode;
+};
 
 const runPlanMode = async (opts: Options, task: string): Promise<void> => {
   console.log("\n[loop] prompt text detected. creating PLAN.md first.");
@@ -24,6 +35,16 @@ const runPlanMode = async (opts: Options, task: string): Promise<void> => {
 
   if (!isFile(PLAN_FILE)) {
     throw new Error("[loop] planning step did not create PLAN.md");
+  }
+
+  const reviewer = resolvePlanReviewer(opts.reviewPlan, opts.agent);
+  console.log(`\n[loop] reviewing PLAN.md with ${reviewer}.`);
+  const reviewPrompt = buildPlanReviewPrompt(task);
+  const review = await runAgent(reviewer, reviewPrompt, opts);
+  if (review.exitCode !== 0) {
+    throw new Error(
+      `[loop] plan review ${reviewer} exited with code ${review.exitCode}`
+    );
   }
 };
 

@@ -44,7 +44,14 @@ const interruptAppServer: MockFn<(signal: "SIGINT" | "SIGTERM") => void> = mock(
   () => undefined
 );
 const runCodexTurn: MockFn<
-  (_prompt: string, _opts: Options) => Promise<RunResult>
+  (
+    _prompt: string,
+    _opts: Options,
+    _callbacks: {
+      onParsed: (text: string) => void;
+      onRaw: (text: string) => void;
+    }
+  ) => Promise<RunResult>
 > = mock(async () => makeResult());
 const runLegacyAgent: MockFn<
   (agent: string, prompt: string, opts: Options) => Promise<RunResult>
@@ -170,6 +177,99 @@ test("runAgent propagates turn/completed failure exit code", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.parsed).toBe("failed");
+});
+
+test("runAgent inserts pretty-mode blank line after message completion", async () => {
+  runCodexTurn.mockImplementation((_prompt, _opts, callbacks) => {
+    callbacks.onRaw(
+      JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: { itemId: "item-1", delta: "I checked the repo." },
+      })
+    );
+    callbacks.onRaw(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            content: [{ text: "I checked the repo." }],
+          },
+        },
+      })
+    );
+    callbacks.onRaw(
+      JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: { itemId: "item-2", delta: "I am updating PLAN.md." },
+      })
+    );
+    return Promise.resolve(makeResult());
+  });
+
+  const originalWrite = process.stdout.write;
+  const writes: string[] = [];
+  const writeSpy = mock((chunk: string | Uint8Array): boolean => {
+    writes.push(
+      typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+    );
+    return true;
+  });
+  (process.stdout as { write: typeof writeSpy }).write = writeSpy;
+
+  try {
+    const result = await runAgent(
+      "codex",
+      "say hi",
+      makeOptions({ format: "pretty" })
+    );
+    expect(result.parsed).toBe("I checked the repo.\nI am updating PLAN.md.");
+    expect(writes.join("")).toContain(
+      "I checked the repo.\n\nI am updating PLAN.md.\n"
+    );
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+test("runAgent preserves nested delta newline content in pretty mode", async () => {
+  runCodexTurn.mockImplementation((_prompt, _opts, callbacks) => {
+    callbacks.onRaw(
+      JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: {
+          delta: {
+            text: "Heading",
+            content: [{ text: "\n- one" }, { text: "\n- two" }],
+          },
+        },
+      })
+    );
+    return Promise.resolve(makeResult());
+  });
+
+  const originalWrite = process.stdout.write;
+  const writes: string[] = [];
+  const writeSpy = mock((chunk: string | Uint8Array): boolean => {
+    writes.push(
+      typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+    );
+    return true;
+  });
+  (process.stdout as { write: typeof writeSpy }).write = writeSpy;
+
+  try {
+    const result = await runAgent(
+      "codex",
+      "say hi",
+      makeOptions({ format: "pretty" })
+    );
+    expect(result.parsed).toBe("Heading\n- one\n- two");
+    expect(writes.join("")).toContain("Heading\n- one\n- two\n");
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 });
 
 test("runAgent only falls back to legacy once per process for app-server compatibility errors", async () => {

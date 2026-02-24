@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { REVIEW_FAIL, REVIEW_PASS } from "../../src/loop/constants";
 import {
   buildPlanPrompt,
+  buildPlanReviewPrompt,
   buildReviewPrompt,
   buildWorkPrompt,
 } from "../../src/loop/prompts";
@@ -12,6 +13,15 @@ test("buildPlanPrompt asks for PLAN.md", () => {
   expect(prompt).toContain("Task:\nship feature");
   expect(prompt).toContain("Create or update PLAN.md");
   expect(prompt).toContain("Do not implement code yet.");
+});
+
+test("buildPlanReviewPrompt asks to review PLAN.md only", () => {
+  const prompt = buildPlanReviewPrompt("  ship feature  ");
+
+  expect(prompt).toContain("Task:\nship feature");
+  expect(prompt).toContain("Review PLAN.md");
+  expect(prompt).toContain("Update PLAN.md directly if needed.");
+  expect(prompt).toContain("Only edit PLAN.md in this step.");
 });
 
 test("buildWorkPrompt keeps task, optional sections, and done instruction", () => {
@@ -69,4 +79,10 @@ test("buildReviewPrompt includes strict review signal instructions", () => {
   expect(prompt).toContain(
     "The final line must be one of the two review signals"
   );
+});
+
+test("buildReviewPrompt omits proof requirements when proof is empty", () => {
+  const prompt = buildReviewPrompt("do task", "<done/>", "");
+
+  expect(prompt).not.toContain("Proof requirements:");
 });

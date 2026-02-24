@@ -62,22 +62,19 @@ test("parseArgs prints version and exits when -v is passed", () => {
   expect(code).toBe(0);
 });
 
-test("parseArgs throws when required proof is missing", () => {
-  expect(() => parseArgs([])).toThrow("Missing required --proof value.");
-});
-
-test("parseArgs returns expected defaults when proof is provided", () => {
+test("parseArgs returns expected defaults when proof is omitted", () => {
   clearModelEnv();
-  const opts = parseArgs(["--proof", "verify with tests"]);
+  const opts = parseArgs([]);
 
   expect(opts.agent).toBe("codex");
   expect(opts.doneSignal).toBe(DEFAULT_DONE_SIGNAL);
-  expect(opts.proof).toBe("verify with tests");
+  expect(opts.proof).toBe("");
   expect(opts.format).toBe("pretty");
   expect(opts.maxIterations).toBe(Number.POSITIVE_INFINITY);
   expect(opts.model).toBe(DEFAULT_CODEX_MODEL);
   expect(opts.promptInput).toBeUndefined();
   expect(opts.review).toBe("claudex");
+  expect(opts.reviewPlan).toBeUndefined();
   expect(opts.tmux).toBe(false);
   expect(opts.worktree).toBe(false);
 });
@@ -147,6 +144,31 @@ test("parseArgs uses reviewer after --review when valid", () => {
   const opts = parseArgs(["--review", "claude", "--proof", "verify"]);
 
   expect(opts.review).toBe("claude");
+});
+
+test("parseArgs treats bare --review-plan as other when no reviewer follows", () => {
+  const opts = parseArgs(["--review-plan", "ship it", "--proof", "verify"]);
+
+  expect(opts.reviewPlan).toBe("other");
+  expect(opts.promptInput).toBe("ship it");
+});
+
+test("parseArgs uses reviewer after --review-plan when valid", () => {
+  const opts = parseArgs(["--review-plan", "claude", "--proof", "verify"]);
+
+  expect(opts.reviewPlan).toBe("claude");
+});
+
+test("parseArgs supports equals form for --review-plan", () => {
+  const opts = parseArgs(["--review-plan=codex", "--proof", "verify"]);
+
+  expect(opts.reviewPlan).toBe("codex");
+});
+
+test("parseArgs rejects invalid --review-plan value", () => {
+  expect(() =>
+    parseArgs(["--review-plan=claudex", "--proof", "verify"])
+  ).toThrow("Invalid --review-plan value: claudex");
 });
 
 test("parseArgs enables tmux mode with --tmux", () => {

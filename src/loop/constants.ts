@@ -10,24 +10,25 @@ export const HELP = `
 loop - v${LOOP_VERSION} - meta agent loop runner
 
 Usage:
-  loop                              Open live panel for running claude/codex instances
+  loop                                Open live panel for running claude/codex instances
   loop [options] [prompt]
-  loop update                       Check for updates and apply if available
-  loop upgrade                      Alias for update
+  loop update                         Check for updates and apply if available
+  loop upgrade                        Alias for update
 
 Options:
-  -a, --agent <claude|codex>        Agent CLI to run (default: codex)
-  -p, --prompt <text|.md file>      Prompt text or path to a .md prompt file
-  -m, --max-iterations <number>.    Max loops (default: infinite)
-  -d, --done <signal>               Done signal (default: <promise>DONE</promise>)
-  --proof <text>                    Proof requirements for task completion (required)
-  --codex-model <model>             Override codex model (default: ${DEFAULT_CODEX_MODEL})
-  --format <pretty|raw>             Log format (default: pretty)
-  --review [claude|codex|claudex]   Review on done (default: claudex)
-  --tmux                            Run in a detached tmux session (name: repo-loop-X)
-  --worktree                        Create and run in a fresh git worktree (name: repo-loop-X)
-  -v, --version                     Show loop version
-  -h, --help                        Show this help
+  -a, --agent <claude|codex>          Agent CLI to run (default: codex)
+  -p, --prompt <text|.md file>        Prompt text or path to a .md prompt file
+  -m, --max-iterations <number>       Max loops (default: infinite)
+  -d, --done <signal>                 Done signal (default: <promise>DONE</promise>)
+  --proof <text>                      Proof requirements for task completion
+  --codex-model <model>               Override codex model (default: ${DEFAULT_CODEX_MODEL})
+  --format <pretty|raw>               Log format (default: pretty)
+  --review [claude|codex|claudex]     Review on done (default: claudex)
+  --review-plan [other|claude|codex]  Review PLAN.md after plain-text planning (default: other)
+  --tmux                              Run in a detached tmux session (name: repo-loop-X)
+  --worktree                          Create and run in a fresh git worktree (name: repo-loop-X)
+  -v, --version                       Show loop version
+  -h, --help                          Show this help
 
 Auto-update:
   Updates are checked automatically on startup and applied on the next run.
