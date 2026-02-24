@@ -14,8 +14,11 @@ const isMarkdownInput = (input: string): boolean =>
 const resolvePlanReviewer = (
   reviewPlan: PlanReviewMode | undefined,
   agent: Agent
-): Agent => {
+): Agent | undefined => {
   const mode = reviewPlan ?? "other";
+  if (mode === "none") {
+    return undefined;
+  }
   if (mode === "other") {
     return agent === "codex" ? "claude" : "codex";
   }
@@ -38,6 +41,10 @@ const runPlanMode = async (opts: Options, task: string): Promise<void> => {
   }
 
   const reviewer = resolvePlanReviewer(opts.reviewPlan, opts.agent);
+  if (!reviewer) {
+    console.log("\n[loop] skipping PLAN.md review (--review-plan none).");
+    return;
+  }
   console.log(`\n[loop] reviewing PLAN.md with ${reviewer}.`);
   const reviewPrompt = buildPlanReviewPrompt(task);
   const review = await runAgent(reviewer, reviewPrompt, opts);

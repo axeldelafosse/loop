@@ -1,7 +1,7 @@
 export type Agent = "claude" | "codex";
 export type Format = "pretty" | "raw";
 export type ReviewMode = Agent | "claudex";
-export type PlanReviewMode = Agent | "other";
+export type PlanReviewMode = Agent | "other" | "none";
 export type ValueFlag =
   | "agent"
   | "prompt"

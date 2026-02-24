@@ -38,8 +38,13 @@ const parseReviewValue = (value: string): ReviewMode => {
   throw new Error(`Invalid --review value: ${value}`);
 };
 
-const parsePlanReviewValue = (value: string): PlanReviewMode => {
-  if (value === "other" || value === "claude" || value === "codex") {
+const parsePlanReviewValue = (value: string | undefined): PlanReviewMode => {
+  if (
+    value === "other" ||
+    value === "claude" ||
+    value === "codex" ||
+    value === "none"
+  ) {
     return value;
   }
   throw new Error(`Invalid --review-plan value: ${value}`);
@@ -126,13 +131,13 @@ const parsePlanReviewArg = (
   }
 
   const next = argv[index + 1];
-  if (next === "other" || next === "claude" || next === "codex") {
-    opts.reviewPlan = next;
+  try {
+    opts.reviewPlan = parsePlanReviewValue(next);
     return index + 1;
+  } catch {
+    opts.reviewPlan = "other";
+    return index;
   }
-
-  opts.reviewPlan = "other";
-  return index;
 };
 
 const consumeArg = (

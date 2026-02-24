@@ -5,6 +5,10 @@ import type { Options, RunResult } from "./types";
 type ExitSignal = "SIGINT" | "SIGTERM";
 type TransportMode = "app-server" | "exec";
 type Callback = (text: string) => void;
+interface RunCodexTurnCallbacks {
+  onParsed?: Callback;
+  onRaw: Callback;
+}
 
 interface JsonFrame {
   error?: unknown;
@@ -38,6 +42,7 @@ const WS_CONNECT_ATTEMPTS = 40;
 const WS_CONNECT_DELAY_MS = 150;
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
 const WAIT_TIMEOUT_MS = 600_000;
+const NOOP_CALLBACK: Callback = () => undefined;
 
 export const CODEX_TRANSPORT_APP_SERVER: TransportMode = "app-server";
 export const CODEX_TRANSPORT_EXEC: TransportMode = "exec";
@@ -887,9 +892,15 @@ export const startAppServer = async (): Promise<void> => {
 export const runCodexTurn = (
   prompt: string,
   opts: Options,
-  callbacks: { onParsed: Callback; onRaw: Callback }
+  // Some callers render directly from raw events and intentionally skip parsed callbacks.
+  callbacks: RunCodexTurnCallbacks
 ): Promise<RunResult> => {
-  return getClient().runTurn(prompt, opts, callbacks.onParsed, callbacks.onRaw);
+  return getClient().runTurn(
+    prompt,
+    opts,
+    callbacks.onParsed ?? NOOP_CALLBACK,
+    callbacks.onRaw
+  );
 };
 
 export const interruptAppServer = (signal: ExitSignal): void => {
