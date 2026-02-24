@@ -206,6 +206,28 @@ test("resolveTask uses codex as review-plan=other reviewer when primary is claud
   );
 });
 
+test("resolveTask skips plan review when review-plan is none", async () => {
+  const { runAgentMock, resolveTask } = await loadResolveTask({
+    isFile: (path) => path === "PLAN.md",
+    readPrompt: async () => "generated plan task",
+    runAgent: async () => ({
+      combined: "",
+      exitCode: 0,
+      parsed: "",
+    }),
+  });
+
+  await resolveTask(makeOptions("ship feature", { reviewPlan: "none" }));
+
+  expect(runAgentMock).toHaveBeenCalledTimes(1);
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
+    "codex",
+    expect.any(String),
+    expect.any(Object)
+  );
+});
+
 test("resolveTask throws when plan review exits non-zero", async () => {
   let calls = 0;
   const { resolveTask } = await loadResolveTask({

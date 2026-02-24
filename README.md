@@ -141,7 +141,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `-d, --done <signal>`: done signal string (default: `<promise>DONE</promise>`)
 - `--format <pretty|raw>`: output format (default: `pretty`)
 - `--review [claude|codex|claudex]`: run a review when done (default: `claudex`; bare `--review` also uses `claudex`). With `claudex`, both reviews run in parallel, then both comments are passed back to the original agent so it can decide what to address. If both reviews found the same issue, that is a stronger signal to fix it.
-- `--review-plan [other|claude|codex]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model).
+- `--review-plan [other|claude|codex|none]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model). Use `none` to skip plan review.
 - `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects (auto-attaches when interactive). Session name format: `repo-loop-X`
 - `--worktree`: create and run inside a fresh git worktree + branch automatically. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help
@@ -160,6 +160,9 @@ loop --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # plain text prompt: override the plan reviewer
 loop --proof "Use {skill} to verify your changes" --review-plan claude "Implement {feature}"
+
+# plain text prompt: skip automatic plan review
+loop --proof "Use {skill} to verify your changes" --review-plan none "Implement {feature}"
 
 # run with claude
 loop --proof "Use {skill} to verify your changes" --agent claude --prompt PLAN.md

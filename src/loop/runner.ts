@@ -15,6 +15,7 @@ import {
   startAppServer,
   useAppServer,
 } from "./codex-app-server";
+import { createCodexRenderer } from "./codex-render";
 import { DEFAULT_CLAUDE_MODEL } from "./constants";
 import type { Agent, Options, RunResult } from "./types";
 
@@ -24,15 +25,6 @@ interface SpawnConfig {
   cmd: string;
 }
 
-interface AppServerEvent {
-  method?: unknown;
-  params?: unknown;
-}
-interface CodexRenderState {
-  activeItemHasDelta: boolean;
-  activeItemId: string;
-  lastCompleted: string;
-}
 type LegacyAgentRunner = (
   agent: Agent,
   prompt: string,
@@ -185,155 +177,6 @@ const eventMessage = (line: string): string => {
   }
 };
 
-const asRecord = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
-
-const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : undefined;
-
-const parseJsonLine = (line: string): Record<string, unknown> | undefined => {
-  if (!line.trim().startsWith("{")) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const collectDeltaText = (value: unknown, out: string[]): void => {
-  if (typeof value === "string") {
-    out.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectDeltaText(item, out);
-    }
-    return;
-  }
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  const record = asRecord(value);
-  const direct = asString(record.delta) ?? asString(record.text);
-  if (direct !== undefined) {
-    out.push(direct);
-  }
-  collectDeltaText(record.content, out);
-  collectDeltaText(record.item, out);
-  collectDeltaText(record.payload, out);
-};
-
-const parseDeltaText = (value: unknown): string => {
-  const parts: string[] = [];
-  collectDeltaText(value, parts);
-  return parts.join("");
-};
-
-const collectMessageText = (value: unknown, out: string[]): void => {
-  if (typeof value === "string") {
-    out.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectMessageText(item, out);
-    }
-    return;
-  }
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  const record = asRecord(value);
-  const direct = asString(record.text) ?? asString(record.delta);
-  if (direct !== undefined) {
-    out.push(direct);
-  }
-  collectMessageText(record.content, out);
-  collectMessageText(record.item, out);
-  collectMessageText(record.payload, out);
-};
-
-const parseCompletedMessage = (value: unknown): string => {
-  const parts: string[] = [];
-  collectMessageText(value, parts);
-  return parts
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("\n");
-};
-
-const parseItemId = (value: unknown): string => {
-  const record = asRecord(value);
-  return (
-    asString(record.itemId) ??
-    asString(record.item_id) ??
-    asString(record.id) ??
-    asString(asRecord(record.item).id) ??
-    ""
-  );
-};
-
-const handleDeltaLine = (
-  params: Record<string, unknown>,
-  renderState: CodexRenderState,
-  appendChunk: (text: string) => void,
-  markMessageBoundary: () => void
-): void => {
-  const itemId = parseItemId(params);
-  const itemChanged =
-    Boolean(renderState.activeItemId) &&
-    Boolean(itemId) &&
-    itemId !== renderState.activeItemId;
-  if (itemChanged) {
-    markMessageBoundary();
-  }
-  if (itemId) {
-    renderState.activeItemId = itemId;
-  }
-  const chunk = parseDeltaText(params.delta ?? params);
-  if (!chunk) {
-    return;
-  }
-  renderState.activeItemHasDelta = true;
-  appendChunk(chunk);
-};
-
-const handleCompletedLine = (
-  params: Record<string, unknown>,
-  renderState: CodexRenderState,
-  appendChunk: (text: string) => void,
-  markMessageBoundary: () => void
-): void => {
-  const item = asRecord(params.item);
-  const itemType = asString(item.type);
-  if (itemType !== "agentMessage" && itemType !== "agent_message") {
-    return;
-  }
-  const completedId = parseItemId(params);
-  const sameActive =
-    Boolean(completedId) &&
-    Boolean(renderState.activeItemId) &&
-    completedId === renderState.activeItemId;
-  const candidate = parseCompletedMessage(item);
-  if (
-    candidate &&
-    candidate !== renderState.lastCompleted &&
-    !(sameActive && renderState.activeItemHasDelta)
-  ) {
-    renderState.lastCompleted = candidate;
-    appendChunk(candidate);
-  }
-  markMessageBoundary();
-};
-
 const consume = async (
   stream: ReadableStream<Uint8Array>,
   onText: (text: string) => void
@@ -397,66 +240,12 @@ const runCodexAgent = async (
     return runnerState.runLegacyAgent("codex", prompt, opts);
   }
 
-  const renderState: CodexRenderState = {
-    activeItemHasDelta: false,
-    activeItemId: "",
-    lastCompleted: "",
-  };
-  let parsed = "";
-  let pendingMessageBreak = false;
-  let wrotePretty = false;
-  const appendChunk = (text: string): void => {
-    if (!text) {
-      return;
-    }
-    const needsMessageBreak =
-      pendingMessageBreak &&
-      parsed &&
-      !parsed.endsWith("\n") &&
-      !text.startsWith("\n");
-    const parsedChunk = needsMessageBreak ? `\n${text}` : text;
-    const prettyChunk = needsMessageBreak ? `\n\n${text}` : text;
-    pendingMessageBreak = false;
-    parsed += parsedChunk;
-    if (opts.format === "pretty") {
-      process.stdout.write(prettyChunk);
-      wrotePretty = true;
-    }
-  };
-  const markMessageBoundary = (): void => {
-    pendingMessageBreak = true;
-    renderState.activeItemHasDelta = false;
-    renderState.activeItemId = "";
-  };
-  const onParsed = (_text: string): void => {
-    // app-server parsing is ignored; client renders from raw events.
-  };
-  const onRaw = (text: string): void => {
-    if (opts.format === "raw") {
-      process.stdout.write(`${text}\n`);
-    }
-
-    const parsedLine = parseJsonLine(text) as AppServerEvent | undefined;
-    if (!parsedLine) {
-      return;
-    }
-    const method = asString(parsedLine.method);
-    const params = asRecord(parsedLine.params);
-
-    if (method === "item/agentMessage/delta") {
-      handleDeltaLine(params, renderState, appendChunk, markMessageBoundary);
-      return;
-    }
-
-    if (method === "item/completed") {
-      handleCompletedLine(
-        params,
-        renderState,
-        appendChunk,
-        markMessageBoundary
-      );
-    }
-  };
+  const renderer = createCodexRenderer({
+    format: opts.format,
+    write: (text) => {
+      process.stdout.write(text);
+    },
+  });
 
   activeAppServerRuns += 1;
   syncSignalHandlers();
@@ -473,13 +262,12 @@ const runCodexAgent = async (
     }
 
     const result = await runCodexTurn(prompt, opts, {
-      onParsed,
-      onRaw,
+      onRaw: renderer.onRawLine,
     });
-    const finalParsed = result.parsed || parsed;
+    const finalParsed = result.parsed || renderer.getParsed();
     if (
       opts.format === "pretty" &&
-      wrotePretty &&
+      renderer.wrotePretty() &&
       !finalParsed.endsWith("\n")
     ) {
       process.stdout.write("\n");

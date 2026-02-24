@@ -159,10 +159,22 @@ test("parseArgs uses reviewer after --review-plan when valid", () => {
   expect(opts.reviewPlan).toBe("claude");
 });
 
+test("parseArgs accepts none after --review-plan", () => {
+  const opts = parseArgs(["--review-plan", "none", "--proof", "verify"]);
+
+  expect(opts.reviewPlan).toBe("none");
+});
+
 test("parseArgs supports equals form for --review-plan", () => {
   const opts = parseArgs(["--review-plan=codex", "--proof", "verify"]);
 
   expect(opts.reviewPlan).toBe("codex");
+});
+
+test("parseArgs supports equals form for --review-plan=none", () => {
+  const opts = parseArgs(["--review-plan=none", "--proof", "verify"]);
+
+  expect(opts.reviewPlan).toBe("none");
 });
 
 test("parseArgs rejects invalid --review-plan value", () => {

@@ -24,7 +24,7 @@ Options:
   --codex-model <model>               Override codex model (default: ${DEFAULT_CODEX_MODEL})
   --format <pretty|raw>               Log format (default: pretty)
   --review [claude|codex|claudex]     Review on done (default: claudex)
-  --review-plan [other|claude|codex]  Review PLAN.md after plain-text planning (default: other)
+  --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
   --tmux                              Run in a detached tmux session (name: repo-loop-X)
   --worktree                          Create and run in a fresh git worktree (name: repo-loop-X)
   -v, --version                       Show loop version

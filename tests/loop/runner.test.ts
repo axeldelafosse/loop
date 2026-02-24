@@ -48,7 +48,7 @@ const runCodexTurn: MockFn<
     _prompt: string,
     _opts: Options,
     _callbacks: {
-      onParsed: (text: string) => void;
+      onParsed?: (text: string) => void;
       onRaw: (text: string) => void;
     }
   ) => Promise<RunResult>
