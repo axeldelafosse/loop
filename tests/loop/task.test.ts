@@ -1,7 +1,10 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { Options, RunResult } from "../../src/loop/types";
 
-const makeOptions = (promptInput?: string): Options => ({
+const makeOptions = (
+  promptInput?: string,
+  overrides: Partial<Options> = {}
+): Options => ({
   agent: "codex",
   doneSignal: "<done/>",
   proof: "verify with tests",
@@ -9,6 +12,7 @@ const makeOptions = (promptInput?: string): Options => ({
   maxIterations: 5,
   model: "test-model",
   ...(promptInput ? { promptInput } : {}),
+  ...overrides,
 });
 
 afterEach(() => {
@@ -97,10 +101,17 @@ test("resolveTask treats spaced text ending with .md as prompt text", async () =
 
   const task = await resolveTask(makeOptions("fix bug in README.md"));
   expect(task).toBe("generated plan task");
-  expect(runAgentMock).toHaveBeenCalledTimes(1);
-  expect(runAgentMock).toHaveBeenCalledWith(
+  expect(runAgentMock).toHaveBeenCalledTimes(2);
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
     "codex",
     expect.stringContaining("Task:\nfix bug in README.md"),
+    expect.any(Object)
+  );
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    2,
+    "claude",
+    expect.stringContaining("Plan review mode:"),
     expect.any(Object)
   );
 });
@@ -120,13 +131,98 @@ test("resolveTask creates PLAN.md first for plain-text prompt input", async () =
   const task = await resolveTask(makeOptions("ship feature"));
 
   expect(task).toBe("generated plan task");
-  expect(runAgentMock).toHaveBeenCalledTimes(1);
-  expect(runAgentMock).toHaveBeenCalledWith(
+  expect(runAgentMock).toHaveBeenCalledTimes(2);
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
     "codex",
     expect.stringContaining("Task:\nship feature"),
     expect.any(Object)
   );
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    2,
+    "claude",
+    expect.stringContaining("Plan review mode:"),
+    expect.any(Object)
+  );
   expect(readPromptMock).toHaveBeenCalledWith("PLAN.md");
+});
+
+test("resolveTask reviews PLAN.md with other model by default in plain-text flow", async () => {
+  const { resolveTask, runAgentMock } = await loadResolveTask({
+    isFile: (path) => path === "PLAN.md",
+    readPrompt: async (input) =>
+      input === "PLAN.md" ? "generated plan task" : input,
+    runAgent: async () => ({
+      combined: "",
+      exitCode: 0,
+      parsed: "",
+    }),
+  });
+
+  const task = await resolveTask(makeOptions("ship feature"));
+
+  expect(task).toBe("generated plan task");
+  expect(runAgentMock).toHaveBeenCalledTimes(2);
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
+    "codex",
+    expect.stringContaining("Plan mode:"),
+    expect.any(Object)
+  );
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    2,
+    "claude",
+    expect.stringContaining("Plan review mode:"),
+    expect.any(Object)
+  );
+});
+
+test("resolveTask uses codex as review-plan=other reviewer when primary is claude", async () => {
+  const { runAgentMock, resolveTask } = await loadResolveTask({
+    isFile: (path) => path === "PLAN.md",
+    readPrompt: async () => "generated plan task",
+    runAgent: async () => ({
+      combined: "",
+      exitCode: 0,
+      parsed: "",
+    }),
+  });
+
+  await resolveTask(
+    makeOptions("ship feature", { agent: "claude", reviewPlan: "other" })
+  );
+
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
+    "claude",
+    expect.any(String),
+    expect.any(Object)
+  );
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    2,
+    "codex",
+    expect.any(String),
+    expect.any(Object)
+  );
+});
+
+test("resolveTask throws when plan review exits non-zero", async () => {
+  let calls = 0;
+  const { resolveTask } = await loadResolveTask({
+    isFile: (path) => path === "PLAN.md",
+    runAgent: () => {
+      calls += 1;
+      return {
+        combined: "",
+        exitCode: calls === 1 ? 0 : 2,
+        parsed: "",
+      };
+    },
+  });
+
+  await expect(resolveTask(makeOptions("ship feature"))).rejects.toThrow(
+    "[loop] plan review claude exited with code 2"
+  );
 });
 
 test("resolveTask throws when planning exits non-zero", async () => {

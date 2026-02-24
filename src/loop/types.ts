@@ -1,6 +1,7 @@
 export type Agent = "claude" | "codex";
 export type Format = "pretty" | "raw";
 export type ReviewMode = Agent | "claudex";
+export type PlanReviewMode = Agent | "other";
 export type ValueFlag =
   | "agent"
   | "prompt"
@@ -19,6 +20,7 @@ export interface Options {
   promptInput?: string;
   proof: string;
   review?: ReviewMode;
+  reviewPlan?: PlanReviewMode;
   tmux?: boolean;
   worktree?: boolean;
 }

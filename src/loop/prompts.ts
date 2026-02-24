@@ -4,6 +4,14 @@ const NEWLINE_RE = /\r?\n/;
 const SPAWN_TEAM_WITH_WORKTREE_ISOLATION =
   "Spawn a team of agents with worktree isolation.";
 
+const appendProofRequirements = (parts: string[], proof: string): void => {
+  const trimmed = proof.trim();
+  if (!trimmed) {
+    return;
+  }
+  parts.push(`Proof requirements:\n${trimmed}`);
+};
+
 const hasProofInTask = (task: string, proof: string): boolean => {
   const proofLines = proof
     .split(NEWLINE_RE)
@@ -30,6 +38,15 @@ export const buildPlanPrompt = (task: string): string =>
     "Only write the plan in this step. Do not implement code yet.",
   ].join("\n\n");
 
+export const buildPlanReviewPrompt = (task: string): string =>
+  [
+    "Plan review mode:",
+    `Task:\n${task.trim()}`,
+    "Review PLAN.md for correctness, missing steps, and verification gaps.",
+    "Update PLAN.md directly if needed.",
+    "Only edit PLAN.md in this step. Do not implement code yet.",
+  ].join("\n\n");
+
 export const buildWorkPrompt = (
   task: string,
   doneSignal: string,
@@ -45,7 +62,7 @@ export const buildWorkPrompt = (
   }
 
   if (!hasProofInTask(task, proof)) {
-    parts.push(`Proof requirements:\n${proof.trim()}`);
+    appendProofRequirements(parts, proof);
   }
 
   parts.push(
@@ -64,7 +81,7 @@ export const buildReviewPrompt = (
     "Run checks/tests/commands as needed and inspect changed files.",
   ];
 
-  parts.push(`Proof requirements:\n${proof.trim()}`);
+  appendProofRequirements(parts, proof);
 
   parts.push(
     `If review is needed, end your response with exactly "${REVIEW_FAIL}" on the final non-empty line. Nothing may follow this line.`
