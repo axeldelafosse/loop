@@ -232,23 +232,9 @@ class ClaudeSdkClient {
     _ws: ServerWebSocket<WSData>,
     text: string
   ): void {
-    try {
-      const msg = JSON.parse(text);
-      if (
-        msg.type === "message" &&
-        typeof msg.content === "string" &&
-        this.ws
-      ) {
-        this.sendJson({
-          type: "user",
-          message: { role: "user", content: msg.content },
-          parent_tool_use_id: null,
-          session_id: this.sessionId,
-        });
-      }
-    } catch {
-      // ignore parse errors from frontends
-    }
+    // Dumb pipe: forward raw to Claude. Frontend is responsible for
+    // sending messages in Claude's native format.
+    this.ws?.send(text);
   }
 
   private createServer(): void {
@@ -465,7 +451,7 @@ class ClaudeSdkClient {
       throw new Error("claude sdk server not connected");
     }
 
-    return new Promise<RunResult>((resolve, reject) => {
+    const result = await new Promise<RunResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (this.turn) {
           this.turn = undefined;
@@ -480,9 +466,9 @@ class ClaudeSdkClient {
         onParsed,
         onRaw,
         parsed: "",
-        resolve: (result) => {
+        resolve: (r) => {
           clearTimeout(timeout);
-          resolve(result);
+          resolve(r);
         },
         reject: (error) => {
           clearTimeout(timeout);
@@ -497,6 +483,10 @@ class ClaudeSdkClient {
         session_id: this.sessionId,
       });
     });
+
+    // Restart the process so the next turn gets a fresh session ID
+    await this.cleanup();
+    return result;
   }
 
   private async cleanup(): Promise<void> {

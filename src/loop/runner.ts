@@ -20,6 +20,7 @@ import { DEFAULT_CLAUDE_MODEL } from "./constants";
 import type { Agent, Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
+type KillSignal = ExitSignal | "SIGKILL";
 interface SpawnConfig {
   args: string[];
   cmd: string;
@@ -50,11 +51,35 @@ const runnerState: RunnerState = {
   useAppServer: () => useAppServer(),
 };
 
+const killChildProcess = (
+  child: ReturnType<typeof spawn>,
+  signal: KillSignal
+): void => {
+  const pid = child.pid;
+  if (process.platform !== "win32" && typeof pid === "number" && pid > 0) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // Fall back to direct child signaling if group kill is unavailable.
+    }
+  }
+  child.kill(signal);
+};
+
 const killChildren = (signal: ExitSignal): void => {
   for (const child of activeChildren) {
-    child.kill(signal);
+    killChildProcess(child, signal);
   }
 };
+
+const killChildrenHard = (): void => {
+  for (const child of activeChildren) {
+    killChildProcess(child, "SIGKILL");
+  }
+};
+
+process.on("exit", killChildrenHard);
 
 const onSigint = (): void => {
   killChildren("SIGINT");
@@ -300,6 +325,7 @@ const runLegacyAgent = async (
 ): Promise<RunResult> => {
   const { args, cmd } = buildCommand(agent, prompt, opts.model);
   const proc = spawn([cmd, ...args], {
+    detached: process.platform !== "win32",
     env: process.env,
     stderr: "pipe",
     stdout: "pipe",

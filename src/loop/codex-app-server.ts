@@ -3,6 +3,7 @@ import { findFreePort } from "./ports";
 import type { Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
+type KillSignal = ExitSignal | "SIGKILL";
 type TransportMode = "app-server" | "exec";
 type Callback = (text: string) => void;
 interface RunCodexTurnCallbacks {
@@ -43,6 +44,7 @@ const WS_CONNECT_DELAY_MS = 150;
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
 const WAIT_TIMEOUT_MS = 600_000;
 const NOOP_CALLBACK: Callback = () => undefined;
+const DETACH_CHILD_PROCESS = process.platform !== "win32";
 
 export const CODEX_TRANSPORT_APP_SERVER: TransportMode = "app-server";
 export const CODEX_TRANSPORT_EXEC: TransportMode = "exec";
@@ -79,6 +81,25 @@ const defaultConnectWs: ConnectWsFn = async (url) => {
   return connectWs(url);
 };
 let connectWsFn: ConnectWsFn = defaultConnectWs;
+
+const killChildProcess = (
+  child: ReturnType<typeof spawn> | undefined,
+  signal: KillSignal
+): void => {
+  if (!child) {
+    return;
+  }
+  const pid = child.pid;
+  if (process.platform !== "win32" && typeof pid === "number" && pid > 0) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // Fall back to direct child signaling if group kill is unavailable.
+    }
+  }
+  child.kill(signal);
+};
 
 const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
@@ -234,7 +255,6 @@ class AppServerClient {
   private started = false;
   private ready = false;
   private requestId = 1;
-  private threadId: string | undefined;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly turns = new Map<string, TurnState>();
   private lock: Promise<void> = Promise.resolve();
@@ -259,6 +279,7 @@ class AppServerClient {
       const child = spawnFn(
         [APP_SERVER_CMD, "app-server", "--listen", listenUrl],
         {
+          detached: DETACH_CHILD_PROCESS,
           env: process.env,
           stderr: "pipe",
           stdin: "pipe",
@@ -305,12 +326,11 @@ class AppServerClient {
         }
       }
       if (this.child) {
-        this.child.kill("SIGTERM");
+        killChildProcess(this.child, "SIGTERM");
         this.child = undefined;
       }
       this.ready = false;
       this.started = false;
-      this.threadId = undefined;
       throw new CodexAppServerFallbackError(
         toError(error).message || "failed to start codex app-server"
       );
@@ -358,7 +378,7 @@ class AppServerClient {
   }
 
   interrupt(signal: ExitSignal): void {
-    this.child?.kill(signal);
+    killChildProcess(this.child, signal);
   }
 
   async close(): Promise<void> {
@@ -378,7 +398,7 @@ class AppServerClient {
       this.ready = false;
       return;
     }
-    this.child.kill("SIGTERM");
+    killChildProcess(this.child, "SIGTERM");
     await this.child.exited;
     this.child = undefined;
     this.ready = false;
@@ -386,9 +406,6 @@ class AppServerClient {
   }
 
   private async ensureThread(model: string): Promise<string> {
-    if (this.threadId) {
-      return this.threadId;
-    }
     const response = await this.sendRequest(METHOD_THREAD_START, {
       model,
       approvalPolicy: "never",
@@ -401,7 +418,6 @@ class AppServerClient {
         "codex app-server returned thread/start without thread id"
       );
     }
-    this.threadId = thread.id;
     return thread.id;
   }
 
@@ -862,7 +878,6 @@ class AppServerClient {
     }
     this.started = false;
     this.ready = false;
-    this.threadId = undefined;
     this.failAll(
       new CodexAppServerFallbackError("codex app-server exited unexpectedly")
     );
@@ -872,7 +887,7 @@ class AppServerClient {
 let singleton: AppServerClient | undefined;
 
 process.on("exit", () => {
-  singleton?.process?.kill("SIGKILL");
+  killChildProcess(singleton?.process, "SIGKILL");
 });
 
 const getClient = (): AppServerClient => {

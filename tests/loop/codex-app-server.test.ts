@@ -20,6 +20,8 @@ interface TestStream {
 
 interface TestProcess {
   close: () => void;
+  killSignals: string[];
+  pid: number;
   writes: string[];
 }
 
@@ -64,6 +66,8 @@ const installSpawn = (appServerModule: AppServerModule): void => {
   appServerModule.codexAppServerInternals.setSpawnFn(
     (_command: unknown, _options: unknown): unknown => {
       const writes: string[] = [];
+      const killSignals: string[] = [];
+      const pid = 10_000 + processes.length + 1;
       const stdout = createStream();
       const stderr = createStream();
       let exitedResolve = () => undefined;
@@ -88,9 +92,11 @@ const installSpawn = (appServerModule: AppServerModule): void => {
 
       const child = {
         exited,
-        kill: () => {
+        kill: (signal?: string) => {
+          killSignals.push(signal ?? "SIGTERM");
           close();
         },
+        pid,
         stdin: {
           write: (chunk: string): void => {
             const lines = chunk.split("\n");
@@ -107,7 +113,7 @@ const installSpawn = (appServerModule: AppServerModule): void => {
         stderr: stderr.stream,
         stdout: stdout.stream,
       };
-      processes.push({ close, writes });
+      processes.push({ close, killSignals, pid, writes });
       return child;
     }
   );
@@ -165,6 +171,8 @@ const makeOptions = (): Options => ({
 const latestWrites = (): string[] => {
   return processes.at(-1)?.writes ?? [];
 };
+
+const latestProcess = (): TestProcess | undefined => processes.at(-1);
 
 const resetState = async (): Promise<void> => {
   const appServer = await getModule();
@@ -591,6 +599,40 @@ test("runCodexTurn falls back to exec mode when turn/start is unsupported", asyn
       onRaw: () => undefined,
     })
   ).rejects.toBeInstanceOf(appServer.CodexAppServerFallbackError);
+});
+
+test("interruptAppServer kills detached process group when pid is available", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  const originalKill = process.kill;
+  const killCalls: Array<{ pid: number; signal: NodeJS.Signals | number }> = [];
+  const killSpy = ((
+    pid: number,
+    signal: NodeJS.Signals | number = "SIGTERM"
+  ): boolean => {
+    killCalls.push({ pid, signal });
+    return true;
+  }) as typeof process.kill;
+  (process as { kill: typeof process.kill }).kill = killSpy;
+
+  try {
+    await appServer.startAppServer();
+    const proc = latestProcess();
+    expect(proc).toBeDefined();
+    appServer.interruptAppServer("SIGTERM");
+    expect(killCalls).toContainEqual({
+      pid: -(proc?.pid ?? 0),
+      signal: "SIGTERM",
+    });
+    expect(proc?.killSignals.length).toBe(0);
+  } finally {
+    process.kill = originalKill;
+  }
 });
 
 test("runCodexTurn recovers after an unexpected app-server exit and can restart", async () => {
