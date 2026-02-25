@@ -5,7 +5,7 @@ import {
   spawn,
   spawnSync,
 } from "bun";
-import { DEFAULT_CLAUDE_MODEL } from "./constants";
+import { AGENT_TURN_TIMEOUT_MS, DEFAULT_CLAUDE_MODEL } from "./constants";
 import { findFreePort } from "./ports";
 import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Options, RunResult } from "./types";
@@ -65,10 +65,9 @@ const BACKGROUND_TASK_CONTINUATION =
   "Background tasks are complete. Continue with the task.";
 const DEFAULT_CHILD_POLL_INTERVAL_MS = 2000;
 const START_TIMEOUT_MS = 60_000;
-const DEFAULT_WAIT_TIMEOUT_MS = 600_000;
 
 let childPollIntervalMs = DEFAULT_CHILD_POLL_INTERVAL_MS;
-let waitTimeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
+let waitTimeoutMs = AGENT_TURN_TIMEOUT_MS;
 
 type CountChildProcessesFn = (pid: number) => number;
 
@@ -193,7 +192,7 @@ export const claudeSdkInternals = {
     childPollIntervalMs = next;
   },
   restoreWaitTimeoutMs(): void {
-    waitTimeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
+    waitTimeoutMs = AGENT_TURN_TIMEOUT_MS;
   },
   setWaitTimeoutMs(next: number): void {
     waitTimeoutMs = next;

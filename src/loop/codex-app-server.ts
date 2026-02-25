@@ -1,4 +1,5 @@
 import { spawn } from "bun";
+import { AGENT_TURN_TIMEOUT_MS } from "./constants";
 import { findFreePort } from "./ports";
 import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Options, RunResult } from "./types";
@@ -42,7 +43,6 @@ const APP_SERVER_PORT_RANGE = 100;
 const WS_CONNECT_ATTEMPTS = 40;
 const WS_CONNECT_DELAY_MS = 150;
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
-const WAIT_TIMEOUT_MS = 600_000;
 const NOOP_CALLBACK: Callback = () => undefined;
 
 export const CODEX_TRANSPORT_APP_SERVER: TransportMode = "app-server";
@@ -460,7 +460,7 @@ class AppServerClient {
         if (this.turns.delete(turnId)) {
           state.reject(new Error(`codex app-server turn ${turnId} timed out`));
         }
-      }, WAIT_TIMEOUT_MS);
+      }, AGENT_TURN_TIMEOUT_MS);
       const clear = () => clearTimeout(timeout);
       state.resolve = (result) => {
         clear();
@@ -824,7 +824,7 @@ class AppServerClient {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error(`codex app-server request "${method}" timed out`));
-      }, WAIT_TIMEOUT_MS);
+      }, AGENT_TURN_TIMEOUT_MS);
       this.pending.set(requestId, { method, resolve, reject, timeout });
     });
   }
