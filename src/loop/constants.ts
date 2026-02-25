@@ -38,6 +38,7 @@ Auto-update:
 
 export const REVIEW_PASS = "<review>PASS</review>";
 export const REVIEW_FAIL = "<review>FAIL</review>";
+export const AGENT_TURN_TIMEOUT_MS = 42_000_069;
 export const NEWLINE_RE = /\r?\n/;
 
 export const VALUE_FLAGS: Record<string, ValueFlag> = {

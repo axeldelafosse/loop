@@ -181,7 +181,12 @@ const handleCompletedLine = (
     state.lastCompleted = candidate;
     appendChunk(state, format, write, candidate);
   }
-  markMessageBoundary(state);
+  // Skip boundary when this completed event matches the item already streamed
+  // via deltas. The delta handler detects item changes and sets boundaries when
+  // a genuinely new item arrives, preventing spurious line breaks mid-stream.
+  if (!(sameActive && state.activeItemHasDelta)) {
+    markMessageBoundary(state);
+  }
 };
 
 export const createCodexRenderer = (
