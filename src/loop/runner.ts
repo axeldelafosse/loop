@@ -452,6 +452,7 @@ export const runAgent = (
   opts: Options
 ): Promise<RunResult> => {
   const sessionId = opts.sessionId;
+  // Consume sessionId once so later loop iterations continue on the latest session.
   opts.sessionId = undefined;
   if (agent === "codex") {
     return runCodexAgent(prompt, opts, sessionId);

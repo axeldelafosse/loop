@@ -8,10 +8,19 @@ import { runAgent } from "./runner";
 import type { Agent, Options, ReviewResult, RunResult } from "./types";
 import { hasSignal } from "./utils";
 
-const ITERATION_COOLDOWN_MS =
-  process.env.LOOP_COOLDOWN_MS !== undefined
-    ? Number(process.env.LOOP_COOLDOWN_MS)
-    : 30_000;
+const DEFAULT_ITERATION_COOLDOWN_MS = 30_000;
+const parseIterationCooldownMs = (): number => {
+  const raw = process.env.LOOP_COOLDOWN_MS;
+  if (raw === undefined) {
+    return DEFAULT_ITERATION_COOLDOWN_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_ITERATION_COOLDOWN_MS;
+  }
+  return parsed;
+};
+const ITERATION_COOLDOWN_MS = parseIterationCooldownMs();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const iterationCooldown = (i: number) =>
   i > 1 ? sleep(ITERATION_COOLDOWN_MS) : Promise.resolve();
