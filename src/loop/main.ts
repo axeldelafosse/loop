@@ -1,12 +1,58 @@
 import { createInterface } from "node:readline/promises";
+import { getLastClaudeSessionId } from "./claude-sdk-server";
+import { getLastCodexThreadId } from "./codex-app-server";
 import { runDraftPrStep } from "./pr";
 import { buildWorkPrompt } from "./prompts";
 import { resolveReviewers, runReview } from "./review";
 import { runAgent } from "./runner";
-import type { Options, ReviewResult } from "./types";
+import type { Agent, Options, ReviewResult, RunResult } from "./types";
 import { hasSignal } from "./utils";
 
+const ITERATION_COOLDOWN_MS =
+  process.env.LOOP_COOLDOWN_MS !== undefined
+    ? Number(process.env.LOOP_COOLDOWN_MS)
+    : 30_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const iterationCooldown = (i: number) =>
+  i > 1 ? sleep(ITERATION_COOLDOWN_MS) : Promise.resolve();
+
+const lastSession = (agent: Agent): string =>
+  agent === "claude" ? getLastClaudeSessionId() : getLastCodexThreadId();
+
 const doneText = (s: string) => `done signal "${s}"`;
+
+const logSessionHint = (agent: Agent): void => {
+  const sid = lastSession(agent);
+  if (sid) {
+    console.error(`[loop] to resume: loop --session ${sid}`);
+  }
+};
+
+const logIterationHeader = (
+  i: number,
+  maxIterations: number,
+  agent: Agent
+): void => {
+  const tag = Number.isFinite(maxIterations) ? `/${maxIterations}` : "";
+  const sid = lastSession(agent);
+  const sidTag = sid ? ` (session: ${sid})` : "";
+  console.log(`\n[loop] iteration ${i}${tag}${sidTag}`);
+};
+
+const tryRunAgent = async (
+  agent: Agent,
+  prompt: string,
+  opts: Options
+): Promise<RunResult | undefined> => {
+  try {
+    return await runAgent(agent, prompt, opts);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`\n[loop] ${agent} error: ${msg}`);
+    logSessionHint(agent);
+    return undefined;
+  }
+};
 
 const formatFollowUp = (review: ReviewResult) => {
   if (review.failureCount > 1) {
@@ -37,20 +83,23 @@ const runIterations = async (
   const { doneSignal, maxIterations } = opts;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
   for (let i = 1; i <= maxIterations; i++) {
-    const tag = Number.isFinite(maxIterations) ? `/${maxIterations}` : "";
-    console.log(`\n[loop] iteration ${i}${tag}`);
+    await iterationCooldown(i);
+    logIterationHeader(i, maxIterations, opts.agent);
     const prompt = buildWorkPrompt(task, doneSignal, opts.proof, reviewNotes);
     reviewNotes = "";
-    const result = await runAgent(opts.agent, prompt, opts);
-    const output = `${result.parsed}\n${result.combined}`;
-    const done = hasSignal(output, doneSignal);
-    if (result.exitCode !== 0) {
-      const hint = done ? ` (${doneText(doneSignal)} seen)` : "";
-      throw new Error(
-        `[loop] ${opts.agent} exited with code ${result.exitCode}${hint}`
-      );
+    const result = await tryRunAgent(opts.agent, prompt, opts);
+    if (!result) {
+      continue;
     }
-    if (!done) {
+    if (result.exitCode !== 0) {
+      console.error(
+        `\n[loop] ${opts.agent} exited with code ${result.exitCode}`
+      );
+      logSessionHint(opts.agent);
+      continue;
+    }
+    const output = `${result.parsed}\n${result.combined}`;
+    if (!hasSignal(output, doneSignal)) {
       continue;
     }
     if (!shouldReview) {

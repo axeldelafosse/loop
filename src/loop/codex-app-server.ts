@@ -232,6 +232,7 @@ class AppServerClient {
   private child: ReturnType<typeof spawn> | undefined;
   private ws: import("./ws-client").WsClient | undefined;
   private closed = false;
+  private lastThreadId = "";
   private started = false;
   private ready = false;
   private requestId = 1;
@@ -241,6 +242,10 @@ class AppServerClient {
 
   get process(): ReturnType<typeof spawn> | undefined {
     return this.child;
+  }
+
+  getLastThreadId(): string {
+    return this.lastThreadId;
   }
 
   hasProcess(): boolean {
@@ -345,10 +350,11 @@ class AppServerClient {
     prompt: string,
     opts: Options,
     onParsed: Callback,
-    onRaw: Callback
+    onRaw: Callback,
+    resumeThreadId?: string
   ): Promise<RunResult> {
     const task = this.lock.then(() =>
-      this.runTurnExclusive(prompt, opts, onParsed, onRaw)
+      this.runTurnExclusive(prompt, opts, onParsed, onRaw, resumeThreadId)
     );
     this.lock = task.then(
       () => undefined,
@@ -385,7 +391,14 @@ class AppServerClient {
     this.started = false;
   }
 
-  private async ensureThread(model: string): Promise<string> {
+  private async ensureThread(
+    model: string,
+    resumeThreadId?: string
+  ): Promise<string> {
+    if (resumeThreadId) {
+      this.lastThreadId = resumeThreadId;
+      return resumeThreadId;
+    }
     const response = await this.sendRequest(METHOD_THREAD_START, {
       model,
       approvalPolicy: "never",
@@ -398,6 +411,7 @@ class AppServerClient {
         "codex app-server returned thread/start without thread id"
       );
     }
+    this.lastThreadId = thread.id;
     return thread.id;
   }
 
@@ -405,7 +419,8 @@ class AppServerClient {
     prompt: string,
     opts: Options,
     onParsed: Callback,
-    onRaw: Callback
+    onRaw: Callback,
+    resumeThreadId?: string
   ): Promise<RunResult> {
     if (!(this.child && this.ready)) {
       await this.start();
@@ -414,7 +429,7 @@ class AppServerClient {
       throw new CodexAppServerFallbackError("codex app-server not running");
     }
 
-    const threadId = await this.ensureThread(opts.model);
+    const threadId = await this.ensureThread(opts.model, resumeThreadId);
     const response = await this.sendRequest(METHOD_TURN_START, {
       threadId,
       input: buildInput(prompt),
@@ -533,10 +548,7 @@ class AppServerClient {
   ): TurnState | undefined {
     const turnId = extractTurnId(payload) || extractThreadId(payload);
     if (turnId) {
-      const byTurn = this.turns.get(turnId);
-      if (byTurn) {
-        return byTurn;
-      }
+      return this.turns.get(turnId);
     }
     return this.turns.size === 1 ? [...this.turns.values()][0] : undefined;
   }
@@ -703,12 +715,16 @@ class AppServerClient {
     }
     if (turnId && this.turns.has(turnId)) {
       const activeState = this.turns.get(turnId);
-      if (activeState) {
-        this.turns.delete(turnId);
-        activeState.reject(
-          new Error(parseErrorText(params) || `turn ${turnId} failed`)
-        );
+      if (!activeState) {
+        return;
       }
+      this.turns.delete(turnId);
+      activeState.reject(
+        new Error(parseErrorText(params) || `turn ${turnId} failed`)
+      );
+      return;
+    }
+    if (turnId) {
       return;
     }
     if (this.turns.size !== 1) {
@@ -723,15 +739,19 @@ class AppServerClient {
     state: TurnState | undefined,
     params: Record<string, unknown>
   ): void {
-    if (!state && this.turns.size === 1) {
+    const turnId = extractTurnId(params) || extractThreadId(params);
+    if (!state) {
+      if (turnId) {
+        return;
+      }
+      if (this.turns.size !== 1) {
+        return;
+      }
       const first = [...this.turns.values()][0];
       if (!first) {
         return;
       }
       this.resolveTurnState(first, params);
-      return;
-    }
-    if (!state) {
       return;
     }
     this.resolveTurnState(state, params);
@@ -888,13 +908,15 @@ export const runCodexTurn = (
   prompt: string,
   opts: Options,
   // Some callers render directly from raw events and intentionally skip parsed callbacks.
-  callbacks: RunCodexTurnCallbacks
+  callbacks: RunCodexTurnCallbacks,
+  resumeThreadId?: string
 ): Promise<RunResult> => {
   return getClient().runTurn(
     prompt,
     opts,
     callbacks.onParsed ?? NOOP_CALLBACK,
-    callbacks.onRaw
+    callbacks.onRaw,
+    resumeThreadId
   );
 };
 
@@ -903,6 +925,9 @@ export const interruptAppServer = (signal: ExitSignal): void => {
 };
 
 export const hasAppServerProcess = (): boolean => getClient().hasProcess();
+
+export const getLastCodexThreadId = (): string =>
+  singleton?.getLastThreadId() ?? "";
 
 export const closeAppServer = async (): Promise<void> => {
   if (!singleton) {

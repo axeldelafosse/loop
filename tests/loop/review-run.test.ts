@@ -42,6 +42,24 @@ test("runReview approves when all reviewers pass", async () => {
   expect(runAgentMock).toHaveBeenCalledTimes(2);
 });
 
+test("runReview ignores transport noise in combined when parsed has final pass signal", async () => {
+  const { runReview } = makeRunReview(async () => ({
+    combined:
+      '{"method":"item/agentMessage/delta","params":{"delta":"thinking"}}\n{"method":"turn/completed","params":{"status":"completed"}}',
+    exitCode: 0,
+    parsed: `Looks good.\n${REVIEW_PASS}`,
+  }));
+
+  const result = await runReview(["codex"], "ship task", makeOptions());
+
+  expect(result).toEqual({
+    approved: true,
+    consensusFail: false,
+    failureCount: 0,
+    notes: "",
+  });
+});
+
 test("runReview treats mixed PASS and FAIL as failure", async () => {
   const { runReview } = makeRunReview(async () => ({
     combined: "",

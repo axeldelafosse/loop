@@ -1,0 +1,312 @@
+import { afterEach, expect, test } from "bun:test";
+import type { serve, spawn } from "bun";
+import {
+  claudeSdkInternals,
+  closeClaudeSdk,
+  runClaudeTurn,
+} from "../../src/loop/claude-sdk-server";
+import type { Options } from "../../src/loop/types";
+
+type JsonRecord = Record<string, unknown>;
+type SendFrame = (frame: JsonRecord) => void;
+type UserMessageHandler = (args: {
+  content: string;
+  index: number;
+  send: SendFrame;
+}) => void;
+interface WebsocketHandlers {
+  close: (ws: FakeSocket, code: number, reason: string) => void;
+  message: (ws: FakeSocket, data: string | ArrayBuffer) => void;
+  open: (ws: FakeSocket) => void;
+}
+
+interface FakeSocket {
+  close: () => void;
+  data: { role: "claude" | "frontend" };
+  send: (data: string) => void;
+}
+
+const makeOptions = (): Options => ({
+  agent: "claude",
+  doneSignal: "<done/>",
+  format: "raw",
+  maxIterations: 1,
+  model: "test-model",
+  proof: "proof",
+});
+
+const asRecord = (value: unknown): JsonRecord => {
+  if (typeof value === "object" && value !== null) {
+    return value as JsonRecord;
+  }
+  return {};
+};
+
+const installHarness = (onUserMessage: UserMessageHandler): string[] => {
+  const userMessages: string[] = [];
+  let handlers: WebsocketHandlers | undefined;
+  let fakePid = 30_000;
+
+  const serveMock = ((options: unknown): unknown => {
+    handlers = asRecord(asRecord(options).websocket) as WebsocketHandlers;
+    return {
+      stop: () => {
+        handlers = undefined;
+      },
+    };
+  }) as unknown as (
+    ...args: Parameters<typeof serve>
+  ) => ReturnType<typeof serve>;
+
+  const spawnMock = ((_command: unknown, _options: unknown): unknown => {
+    if (!handlers) {
+      throw new Error("expected websocket handlers before spawn");
+    }
+
+    const currentHandlers = handlers;
+    let stdoutController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    let stderrController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        stdoutController = controller;
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) {
+        stderrController = controller;
+      },
+    });
+
+    let exitedResolve = (_code: number): void => undefined;
+    const exited = new Promise<number>((resolve) => {
+      exitedResolve = resolve;
+    });
+
+    let socketClosed = false;
+    let childClosed = false;
+
+    const socket: FakeSocket = {
+      data: { role: "claude" },
+      close: () => {
+        if (socketClosed) {
+          return;
+        }
+        socketClosed = true;
+        currentHandlers.close(socket, 1000, "closed");
+      },
+      send: (raw) => {
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) {
+            continue;
+          }
+          const frame = asRecord(JSON.parse(line));
+          const send: SendFrame = (out) => {
+            currentHandlers.message(socket, `${JSON.stringify(out)}\n`);
+          };
+          if (
+            frame.type === "control_request" &&
+            asRecord(frame.request).subtype === "initialize"
+          ) {
+            send({
+              type: "control_response",
+              response: { request_id: frame.request_id, subtype: "success" },
+            });
+            send({ type: "system", subtype: "init", session_id: "session-1" });
+            continue;
+          }
+          if (frame.type === "user") {
+            const content = String(asRecord(frame.message).content ?? "");
+            userMessages.push(content);
+            onUserMessage({
+              content,
+              index: userMessages.length - 1,
+              send,
+            });
+          }
+        }
+      },
+    };
+
+    queueMicrotask(() => {
+      currentHandlers.open(socket);
+    });
+
+    const closeChild = (): void => {
+      if (childClosed) {
+        return;
+      }
+      childClosed = true;
+      socket.close();
+      try {
+        stdoutController?.close();
+      } catch {
+        // ignore close errors in tests
+      }
+      try {
+        stderrController?.close();
+      } catch {
+        // ignore close errors in tests
+      }
+      exitedResolve(0);
+    };
+
+    return {
+      exited,
+      kill: (_signal?: string) => {
+        closeChild();
+        return true;
+      },
+      pid: fakePid++,
+      stderr,
+      stdout,
+    };
+  }) as unknown as (
+    ...args: Parameters<typeof spawn>
+  ) => ReturnType<typeof spawn>;
+
+  claudeSdkInternals.setServeFn(serveMock);
+  claudeSdkInternals.setSpawnFn(spawnMock);
+  return userMessages;
+};
+
+afterEach(async () => {
+  await closeClaudeSdk();
+  claudeSdkInternals.restoreSpawnFn();
+  claudeSdkInternals.restoreServeFn();
+  claudeSdkInternals.restoreCountChildProcessesFn();
+  claudeSdkInternals.restoreChildPollIntervalMs();
+  claudeSdkInternals.restoreWaitTimeoutMs();
+});
+
+test("runClaudeTurn resolves immediately when no background task is detected", async () => {
+  const userMessages = installHarness(({ index, send }) => {
+    if (index !== 0) {
+      return;
+    }
+    send({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    send({ type: "result", is_error: false });
+  });
+
+  const result = await runClaudeTurn("ship it", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(userMessages).toEqual(["ship it"]);
+  expect(result.exitCode).toBe(0);
+  expect(result.parsed).toBe("done");
+});
+
+test("runClaudeTurn drains background Task workers then sends continuation", async () => {
+  let pollCount = 0;
+  claudeSdkInternals.setChildPollIntervalMs(1);
+  claudeSdkInternals.setCountChildProcessesFn(() => {
+    pollCount += 1;
+    return pollCount < 3 ? 1 : 0;
+  });
+
+  const userMessages = installHarness(({ index, send }) => {
+    if (index === 0) {
+      send({
+        type: "control_request",
+        request_id: "tool-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Task",
+          input: { run_in_background: true },
+        },
+      });
+      send({ type: "result", is_error: false });
+      return;
+    }
+    if (index === 1) {
+      send({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "final answer" }] },
+      });
+      send({ type: "result", is_error: false });
+    }
+  });
+
+  const result = await runClaudeTurn("do work", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(pollCount).toBeGreaterThanOrEqual(3);
+  expect(userMessages[1]).toBe(claudeSdkInternals.BACKGROUND_TASK_CONTINUATION);
+  expect(result.parsed).toBe("final answer");
+});
+
+test("non-Task tools with run_in_background do not trigger drain mode", async () => {
+  let pollCount = 0;
+  claudeSdkInternals.setChildPollIntervalMs(1);
+  claudeSdkInternals.setCountChildProcessesFn(() => {
+    pollCount += 1;
+    return 1;
+  });
+
+  const userMessages = installHarness(({ index, send }) => {
+    if (index !== 0) {
+      return;
+    }
+    send({
+      type: "control_request",
+      request_id: "tool-2",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { run_in_background: true },
+      },
+    });
+    send({ type: "result", is_error: false });
+  });
+
+  await runClaudeTurn("do work", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(userMessages).toEqual(["do work"]);
+  expect(pollCount).toBe(0);
+});
+
+test("timeout rejects even while background workers are still present", async () => {
+  claudeSdkInternals.setWaitTimeoutMs(25);
+  claudeSdkInternals.setChildPollIntervalMs(1);
+  claudeSdkInternals.setCountChildProcessesFn(() => 1);
+
+  installHarness(({ index, send }) => {
+    if (index !== 0) {
+      return;
+    }
+    send({
+      type: "control_request",
+      request_id: "tool-3",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Task",
+        input: { run_in_background: true },
+      },
+    });
+    send({ type: "result", is_error: false });
+  });
+
+  await expect(
+    runClaudeTurn("do work", makeOptions(), {
+      onDelta: () => undefined,
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    })
+  ).rejects.toThrow("claude sdk turn timed out");
+});

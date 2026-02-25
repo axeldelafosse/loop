@@ -381,6 +381,66 @@ test("runCodexTurn parses successful deltas and completion", async () => {
   expect(rawLines.join(" ")).toContain("turn/completed");
 });
 
+test("runCodexTurn ignores foreign subagent turn notifications", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      setTimeout(() => {
+        write({
+          method: "error",
+          params: {
+            turnId: "sub-turn-1",
+            error: { message: "subagent failed" },
+          },
+        });
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "sub-turn-1",
+            turn: {
+              id: "sub-turn-1",
+              status: "failed",
+              error: { message: "subagent turn failed" },
+            },
+          },
+        });
+        write({
+          method: "item/agentMessage/delta",
+          params: {
+            turnId: "turn-1",
+            delta: "parent turn finished",
+          },
+        });
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      }, 0);
+    }
+  };
+
+  const result = await appServer.runCodexTurn("say hi", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.parsed).toContain("parent turn finished");
+  expect(result.parsed).not.toContain("subagent failed");
+});
+
 test("runCodexTurn maps failed turns to non-zero exit", async () => {
   const appServer = await getModule();
   currentHandler = (request, write) => {
