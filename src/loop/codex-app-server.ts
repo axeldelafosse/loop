@@ -1,9 +1,9 @@
 import { spawn } from "bun";
 import { findFreePort } from "./ports";
+import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
-type KillSignal = ExitSignal | "SIGKILL";
 type TransportMode = "app-server" | "exec";
 type Callback = (text: string) => void;
 interface RunCodexTurnCallbacks {
@@ -44,7 +44,6 @@ const WS_CONNECT_DELAY_MS = 150;
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
 const WAIT_TIMEOUT_MS = 600_000;
 const NOOP_CALLBACK: Callback = () => undefined;
-const DETACH_CHILD_PROCESS = process.platform !== "win32";
 
 export const CODEX_TRANSPORT_APP_SERVER: TransportMode = "app-server";
 export const CODEX_TRANSPORT_EXEC: TransportMode = "exec";
@@ -81,25 +80,6 @@ const defaultConnectWs: ConnectWsFn = async (url) => {
   return connectWs(url);
 };
 let connectWsFn: ConnectWsFn = defaultConnectWs;
-
-const killChildProcess = (
-  child: ReturnType<typeof spawn> | undefined,
-  signal: KillSignal
-): void => {
-  if (!child) {
-    return;
-  }
-  const pid = child.pid;
-  if (process.platform !== "win32" && typeof pid === "number" && pid > 0) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // Fall back to direct child signaling if group kill is unavailable.
-    }
-  }
-  child.kill(signal);
-};
 
 const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;

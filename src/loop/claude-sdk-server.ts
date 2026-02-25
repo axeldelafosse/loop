@@ -1,6 +1,7 @@
 import { type Server, type ServerWebSocket, serve, spawn } from "bun";
 import { DEFAULT_CLAUDE_MODEL } from "./constants";
 import { findFreePort } from "./ports";
+import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
@@ -92,6 +93,21 @@ const pipeToStderr = (stream: ReadableStream<Uint8Array>): void => {
   pump();
 };
 
+const isValidNdjson = (text: string): boolean => {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      JSON.parse(trimmed);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+};
+
 let spawnFn: SpawnFn = spawn;
 
 export const claudeSdkInternals = {
@@ -165,6 +181,7 @@ class ClaudeSdkClient {
           url,
         ],
         {
+          detached: DETACH_CHILD_PROCESS,
           env: process.env,
           stderr: "pipe",
           stdout: "pipe",
@@ -210,7 +227,7 @@ class ClaudeSdkClient {
   }
 
   interrupt(signal: ExitSignal): void {
-    this.child?.kill(signal);
+    killChildProcess(this.child, signal);
   }
 
   async close(): Promise<void> {
@@ -232,8 +249,9 @@ class ClaudeSdkClient {
     _ws: ServerWebSocket<WSData>,
     text: string
   ): void {
-    // Dumb pipe: forward raw to Claude. Frontend is responsible for
-    // sending messages in Claude's native format.
+    if (!isValidNdjson(text)) {
+      return;
+    }
     this.ws?.send(text);
   }
 
@@ -484,7 +502,8 @@ class ClaudeSdkClient {
       });
     });
 
-    // Restart the process so the next turn gets a fresh session ID
+    // Claude SDK session state is process-bound, so restart per turn to force a
+    // fresh session ID and avoid carrying state across independent loop turns.
     await this.cleanup();
     return result;
   }
@@ -511,7 +530,7 @@ class ClaudeSdkClient {
       this.server = undefined;
     }
     if (this.child) {
-      this.child.kill("SIGTERM");
+      killChildProcess(this.child, "SIGTERM");
       await this.child.exited;
       this.child = undefined;
     }
@@ -537,7 +556,7 @@ class ClaudeSdkClient {
 let singleton: ClaudeSdkClient | undefined;
 
 process.on("exit", () => {
-  singleton?.process?.kill("SIGKILL");
+  killChildProcess(singleton?.process, "SIGKILL");
 });
 
 const getClient = (): ClaudeSdkClient => {

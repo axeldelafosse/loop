@@ -17,10 +17,10 @@ import {
 } from "./codex-app-server";
 import { createCodexRenderer } from "./codex-render";
 import { DEFAULT_CLAUDE_MODEL } from "./constants";
+import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Agent, Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
-type KillSignal = ExitSignal | "SIGKILL";
 interface SpawnConfig {
   args: string[];
   cmd: string;
@@ -49,22 +49,6 @@ let fallbackWarned = false;
 const runnerState: RunnerState = {
   runLegacyAgent: (agent, prompt, opts) => runLegacyAgent(agent, prompt, opts),
   useAppServer: () => useAppServer(),
-};
-
-const killChildProcess = (
-  child: ReturnType<typeof spawn>,
-  signal: KillSignal
-): void => {
-  const pid = child.pid;
-  if (process.platform !== "win32" && typeof pid === "number" && pid > 0) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // Fall back to direct child signaling if group kill is unavailable.
-    }
-  }
-  child.kill(signal);
 };
 
 const killChildren = (signal: ExitSignal): void => {
@@ -325,7 +309,7 @@ const runLegacyAgent = async (
 ): Promise<RunResult> => {
   const { args, cmd } = buildCommand(agent, prompt, opts.model);
   const proc = spawn([cmd, ...args], {
-    detached: process.platform !== "win32",
+    detached: DETACH_CHILD_PROCESS,
     env: process.env,
     stderr: "pipe",
     stdout: "pipe",
