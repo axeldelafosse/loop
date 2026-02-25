@@ -35,7 +35,7 @@ test("runInTmux starts detached session and strips --tmux", () => {
   const attaches: string[] = [];
   const logs: string[] = [];
   const command =
-    "'env' 'LOOP_RUN_BASE=repo' 'LOOP_RUN_ID=1' 'bun' '/repo/src/loop.ts' '--proof' 'verify' 'fix bug'";
+    "'env' 'LOOP_RUN_BASE=repo' 'LOOP_RUN_ID=1' 'bun' '/repo/src/cli.ts' '--proof' 'verify' 'fix bug'";
 
   const delegated = runInTmux(["--tmux", "--proof", "verify", "fix bug"], {
     attach: (session: string) => {
@@ -45,7 +45,7 @@ test("runInTmux starts detached session and strips --tmux", () => {
     env: {},
     findBinary: () => true,
     isInteractive: () => true,
-    launchArgv: ["bun", "/repo/src/loop.ts"],
+    launchArgv: ["bun", "/repo/src/cli.ts"],
     log: (line: string) => {
       logs.push(line);
     },
@@ -168,10 +168,10 @@ test("tmux internals strip --tmux from forwarded args", () => {
 test("tmux internals build launch argv from exec path", () => {
   expect(
     tmuxInternals.buildLaunchArgv(
-      ["/usr/local/bin/bun", "src/loop.ts", "--tmux", "--proof", "verify"],
+      ["/usr/local/bin/bun", "src/cli.ts", "--tmux", "--proof", "verify"],
       "/usr/local/bin/bun"
     )
-  ).toEqual(["/usr/local/bin/bun", `${process.cwd()}/src/loop.ts`]);
+  ).toEqual(["/usr/local/bin/bun", `${process.cwd()}/src/cli.ts`]);
 });
 
 test("tmux internals build launch argv for bun-compiled binary", () => {

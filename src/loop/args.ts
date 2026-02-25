@@ -95,6 +95,14 @@ const applyValueFlag = (
     opts.model = trimmed;
     return;
   }
+  if (flag === "session") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error("Invalid --session value: cannot be empty");
+    }
+    opts.sessionId = trimmed;
+    return;
+  }
   opts.format = parseFormat(value);
 };
 

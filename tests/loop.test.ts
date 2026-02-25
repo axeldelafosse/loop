@@ -74,7 +74,7 @@ const loadRunCli = async (
     },
   }));
 
-  const { runCli } = await import(`../src/loop?test=${Date.now()}`);
+  const { runCli } = await import(`../src/cli?test=${Date.now()}`);
   return {
     applyStagedMock,
     handleManualMock,

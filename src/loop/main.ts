@@ -1,31 +1,17 @@
 import { createInterface } from "node:readline/promises";
+import {
+  doneText,
+  formatFollowUp,
+  iterationCooldown,
+  logIterationHeader,
+  logSessionHint,
+  tryRunAgent,
+} from "./iteration";
 import { runDraftPrStep } from "./pr";
 import { buildWorkPrompt } from "./prompts";
 import { resolveReviewers, runReview } from "./review";
-import { runAgent } from "./runner";
-import type { Options, ReviewResult } from "./types";
+import type { Options } from "./types";
 import { hasSignal } from "./utils";
-
-const doneText = (s: string) => `done signal "${s}"`;
-
-const formatFollowUp = (review: ReviewResult) => {
-  if (review.failureCount > 1) {
-    const header = review.consensusFail
-      ? "Both reviewers requested changes. Decide for each comment whether to address it now. If you skip one, explain why briefly. If both reviews found the same issue, it might be worth addressing."
-      : "Multiple reviewers requested changes. Decide for each comment whether to address it now. If you skip one, explain why briefly.";
-    return {
-      notes: review.notes ? `${header}\n\n${review.notes}` : "",
-      log: review.consensusFail
-        ? "\n[loop] both reviewers requested changes. deciding what to address."
-        : "\n[loop] multiple reviewers requested changes. deciding what to address.",
-    };
-  }
-
-  return {
-    notes: review.notes,
-    log: "\n[loop] one reviewer requested changes. continuing loop.",
-  };
-};
 
 const runIterations = async (
   task: string,
@@ -33,24 +19,29 @@ const runIterations = async (
   reviewers: string[]
 ) => {
   let reviewNotes = "";
+  let sessionId = opts.sessionId;
   const shouldReview = reviewers.length > 0;
   const { doneSignal, maxIterations } = opts;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
   for (let i = 1; i <= maxIterations; i++) {
-    const tag = Number.isFinite(maxIterations) ? `/${maxIterations}` : "";
-    console.log(`\n[loop] iteration ${i}${tag}`);
+    await iterationCooldown(i);
+    logIterationHeader(i, maxIterations, opts.agent);
     const prompt = buildWorkPrompt(task, doneSignal, opts.proof, reviewNotes);
     reviewNotes = "";
-    const result = await runAgent(opts.agent, prompt, opts);
-    const output = `${result.parsed}\n${result.combined}`;
-    const done = hasSignal(output, doneSignal);
-    if (result.exitCode !== 0) {
-      const hint = done ? ` (${doneText(doneSignal)} seen)` : "";
-      throw new Error(
-        `[loop] ${opts.agent} exited with code ${result.exitCode}${hint}`
-      );
+    const result = await tryRunAgent(opts.agent, prompt, opts, sessionId);
+    sessionId = undefined;
+    if (!result) {
+      continue;
     }
-    if (!done) {
+    if (result.exitCode !== 0) {
+      console.error(
+        `\n[loop] ${opts.agent} exited with code ${result.exitCode}`
+      );
+      logSessionHint(opts.agent);
+      continue;
+    }
+    const output = `${result.parsed}\n${result.combined}`;
+    if (!hasSignal(output, doneSignal)) {
       continue;
     }
     if (!shouldReview) {

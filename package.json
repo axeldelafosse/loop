@@ -4,14 +4,14 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "bun build --compile --outfile loop src/loop.ts",
+    "build": "bun build --compile --outfile loop src/cli.ts",
     "install:global": "bun run build && bun run src/install.ts",
     "release:patch": "npm version patch && git push --follow-tags",
     "check": "ultracite check",
     "fix": "ultracite fix"
   },
   "bin": {
-    "loop": "./src/loop.ts"
+    "loop": "./src/cli.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

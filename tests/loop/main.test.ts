@@ -1,6 +1,8 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { Options, ReviewResult, RunResult } from "../../src/loop/types";
 
+process.env.LOOP_COOLDOWN_MS = "0";
+
 const makeOptions = (overrides: Partial<Options> = {}): Options => ({
   agent: "codex",
   doneSignal: "<done/>",
@@ -93,15 +95,15 @@ test("runLoop stops immediately on done signal when review is disabled", async (
   expect(runDraftPrStep).not.toHaveBeenCalled();
 });
 
-test("runLoop throws when agent exits non-zero even with done signal (no review)", async () => {
-  const { runLoop } = await loadRunLoop({
+test("runLoop continues on non-zero exit code instead of throwing", async () => {
+  const { runLoop, runAgent } = await loadRunLoop({
     resolveReviewers: () => [],
     runAgent: async () => makeRunResult("<done/>", "", 1),
   });
 
-  await expect(
-    runLoop("Ship feature", makeOptions({ review: undefined }))
-  ).rejects.toThrow("exited with code 1");
+  await runLoop("Ship feature", makeOptions({ review: undefined }));
+
+  expect(runAgent).toHaveBeenCalledTimes(2);
 });
 
 test("runLoop creates draft PR when done signal is reviewed and approved", async () => {
@@ -124,15 +126,15 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
   expect(runDraftPrStep).toHaveBeenNthCalledWith(1, "Ship feature", opts);
 });
 
-test("runLoop throws when agent exits non-zero even with done signal (with review)", async () => {
-  const { runLoop, runReview, runDraftPrStep } = await loadRunLoop({
+test("runLoop skips review when agent exits non-zero even with done signal", async () => {
+  const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
     resolveReviewers: () => ["codex", "claude"],
     runAgent: async () => makeRunResult("<done/>", "", 1),
   });
 
-  await expect(runLoop("Ship feature", makeOptions())).rejects.toThrow(
-    "exited with code 1"
-  );
+  await runLoop("Ship feature", makeOptions());
+
+  expect(runAgent).toHaveBeenCalledTimes(2);
   expect(runReview).not.toHaveBeenCalled();
   expect(runDraftPrStep).not.toHaveBeenCalled();
 });

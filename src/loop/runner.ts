@@ -29,7 +29,8 @@ interface SpawnConfig {
 type LegacyAgentRunner = (
   agent: Agent,
   prompt: string,
-  opts: Options
+  opts: Options,
+  sessionId?: string
 ) => Promise<RunResult>;
 interface RunnerState {
   runLegacyAgent: LegacyAgentRunner;
@@ -47,7 +48,8 @@ let activeClaudeSdkRuns = 0;
 let watchingSignals = false;
 let fallbackWarned = false;
 const runnerState: RunnerState = {
-  runLegacyAgent: (agent, prompt, opts) => runLegacyAgent(agent, prompt, opts),
+  runLegacyAgent: (agent, prompt, opts, sessionId) =>
+    runLegacyAgent(agent, prompt, opts, sessionId),
   useAppServer: () => useAppServer(),
 };
 
@@ -105,22 +107,24 @@ const syncSignalHandlers = (): void => {
 export const buildCommand = (
   agent: Agent,
   prompt: string,
-  model: string
+  model: string,
+  sessionId?: string
 ): SpawnConfig => {
   if (agent === "claude") {
-    return {
-      args: [
-        "-p",
-        prompt,
-        "--dangerously-skip-permissions",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--model",
-        DEFAULT_CLAUDE_MODEL,
-      ],
-      cmd: "claude",
-    };
+    const args = [
+      "-p",
+      prompt,
+      "--dangerously-skip-permissions",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      DEFAULT_CLAUDE_MODEL,
+    ];
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    }
+    return { args, cmd: "claude" };
   }
 
   return {
@@ -243,7 +247,8 @@ const appendParsedLine = (
 
 const runCodexAgent = async (
   prompt: string,
-  opts: Options
+  opts: Options,
+  sessionId?: string
 ): Promise<RunResult> => {
   if (!runnerState.useAppServer()) {
     return runnerState.runLegacyAgent("codex", prompt, opts);
@@ -270,9 +275,12 @@ const runCodexAgent = async (
       );
     }
 
-    const result = await runCodexTurn(prompt, opts, {
-      onRaw: renderer.onRawLine,
-    });
+    const result = await runCodexTurn(
+      prompt,
+      opts,
+      { onRaw: renderer.onRawLine },
+      sessionId
+    );
     const finalParsed = result.parsed || renderer.getParsed();
     if (
       opts.format === "pretty" &&
@@ -305,9 +313,10 @@ const runCodexAgent = async (
 const runLegacyAgent = async (
   agent: Agent,
   prompt: string,
-  opts: Options
+  opts: Options,
+  sessionId?: string
 ): Promise<RunResult> => {
-  const { args, cmd } = buildCommand(agent, prompt, opts.model);
+  const { args, cmd } = buildCommand(agent, prompt, opts.model, sessionId);
   const proc = spawn([cmd, ...args], {
     detached: DETACH_CHILD_PROCESS,
     env: process.env,
@@ -382,8 +391,9 @@ const runLegacyAgent = async (
 const defaultRunLegacyAgent: LegacyAgentRunner = (
   agent: Agent,
   prompt: string,
-  opts: Options
-): Promise<RunResult> => runLegacyAgent(agent, prompt, opts);
+  opts: Options,
+  sessionId?: string
+): Promise<RunResult> => runLegacyAgent(agent, prompt, opts, sessionId);
 
 export const runnerInternals = {
   reset(): void {
@@ -400,7 +410,8 @@ export const runnerInternals = {
 
 const runClaudeAgent = async (
   prompt: string,
-  opts: Options
+  opts: Options,
+  sessionId?: string
 ): Promise<RunResult> => {
   let parsed = "";
   let state = { parsed: "", prettyCount: 0, lastMessage: "" };
@@ -422,7 +433,7 @@ const runClaudeAgent = async (
   activeClaudeSdkRuns += 1;
   syncSignalHandlers();
   try {
-    await startClaudeSdk();
+    await startClaudeSdk(sessionId);
     const result = await runClaudeTurn(prompt, opts, {
       onDelta,
       onParsed,
@@ -438,13 +449,14 @@ const runClaudeAgent = async (
 export const runAgent = (
   agent: Agent,
   prompt: string,
-  opts: Options
+  opts: Options,
+  sessionId?: string
 ): Promise<RunResult> => {
   if (agent === "codex") {
-    return runCodexAgent(prompt, opts);
+    return runCodexAgent(prompt, opts, sessionId);
   }
   if (agent === "claude") {
-    return runClaudeAgent(prompt, opts);
+    return runClaudeAgent(prompt, opts, sessionId);
   }
-  return runLegacyAgent(agent, prompt, opts);
+  return runLegacyAgent(agent, prompt, opts, sessionId);
 };

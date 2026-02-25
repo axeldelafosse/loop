@@ -9,7 +9,8 @@ export type ValueFlag =
   | "done"
   | "proof"
   | "codexModel"
-  | "format";
+  | "format"
+  | "session";
 
 export interface Options {
   agent: Agent;
@@ -21,6 +22,7 @@ export interface Options {
   proof: string;
   review?: ReviewMode;
   reviewPlan?: PlanReviewMode;
+  sessionId?: string;
   tmux?: boolean;
   worktree?: boolean;
 }
