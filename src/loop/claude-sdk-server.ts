@@ -345,6 +345,9 @@ class ClaudeSdkClient {
     if (!isValidNdjson(text)) {
       return;
     }
+    // Fan out frontend-originated NDJSON so observer UIs can render
+    // user prompts that may not be echoed back by Claude.
+    this.broadcastToFrontends(text);
     this.ws?.send(text);
   }
 
@@ -589,12 +592,15 @@ class ClaudeSdkClient {
   }
 
   private sendUserMessage(content: string): void {
-    this.sendJson({
+    const payload = {
       type: "user",
       message: { role: "user", content },
       parent_tool_use_id: null,
       session_id: this.sessionId,
-    });
+    };
+    const raw = `${JSON.stringify(payload)}\n`;
+    this.broadcastToFrontends(raw);
+    this.ws?.send(raw);
   }
 
   private async runTurnExclusive(
