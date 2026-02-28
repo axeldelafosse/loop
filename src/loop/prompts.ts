@@ -1,6 +1,5 @@
-import { REVIEW_FAIL, REVIEW_PASS } from "./constants";
+import { NEWLINE_RE, REVIEW_FAIL, REVIEW_PASS } from "./constants";
 
-const NEWLINE_RE = /\r?\n/;
 const SPAWN_TEAM_WITH_WORKTREE_ISOLATION =
   "Spawn a team of agents with worktree isolation.";
 
@@ -78,7 +77,7 @@ export const buildReviewPrompt = (
 ): string => {
   const parts = [
     `Review this completed work for the task below and verify it in the current repo.\n\nTask:\n${task.trim()}`,
-    "Run checks/tests/commands as needed and inspect changed files.",
+    "Focus your review on unstaged changes (the diff produced by `git diff`). Run checks/tests/commands as needed.",
   ];
 
   appendProofRequirements(parts, proof);

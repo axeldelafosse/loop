@@ -18,6 +18,7 @@ afterEach(() => {
 });
 
 interface CliModuleDeps {
+  checkGitState?: () => string | undefined;
   maybeEnterWorktree?: (opts: Options) => void | Promise<void>;
   parseArgs?: (argv: string[]) => Options;
   resolveTask?: (opts: Options) => Promise<string>;
@@ -36,6 +37,7 @@ const loadRunCli = async (
   deps: CliModuleDeps = {},
   updateOverrides: UpdateModuleDeps = {}
 ) => {
+  const checkGitStateMock = mock(deps.checkGitState ?? (() => undefined));
   const maybeEnterWorktreeMock = mock(
     deps.maybeEnterWorktree ?? (() => undefined)
   );
@@ -57,6 +59,7 @@ const loadRunCli = async (
 
   mock.module("../src/loop/deps", () => ({
     cliDeps: {
+      checkGitState: checkGitStateMock,
       maybeEnterWorktree: maybeEnterWorktreeMock,
       parseArgs: parseArgsMock,
       resolveTask: resolveTaskMock,
@@ -77,6 +80,7 @@ const loadRunCli = async (
   const { runCli } = await import(`../src/cli?test=${Date.now()}`);
   return {
     applyStagedMock,
+    checkGitStateMock,
     handleManualMock,
     maybeEnterWorktreeMock,
     parseArgsMock,
