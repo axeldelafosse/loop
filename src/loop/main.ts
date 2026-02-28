@@ -23,16 +23,21 @@ const runIterations = async (
   const shouldReview = reviewers.length > 0;
   const { doneSignal, maxIterations } = opts;
   console.log(`\n[loop] PLAN.md:\n\n${task}`);
+
   for (let i = 1; i <= maxIterations; i++) {
     await iterationCooldown(i);
     logIterationHeader(i, maxIterations, opts.agent);
+
     const prompt = buildWorkPrompt(task, doneSignal, opts.proof, reviewNotes);
     reviewNotes = "";
+
     const result = await tryRunAgent(opts.agent, prompt, opts, sessionId);
     sessionId = undefined;
+
     if (!result) {
       continue;
     }
+
     if (result.exitCode !== 0) {
       console.error(
         `\n[loop] ${opts.agent} exited with code ${result.exitCode}`
@@ -40,14 +45,17 @@ const runIterations = async (
       logSessionHint(opts.agent);
       continue;
     }
+
     const output = `${result.parsed}\n${result.combined}`;
     if (!hasSignal(output, doneSignal)) {
       continue;
     }
+
     if (!shouldReview) {
       console.log(`\n[loop] ${doneText(doneSignal)} detected, stopping.`);
       return true;
     }
+
     const review = await runReview(reviewers, task, opts);
     if (review.approved) {
       await runDraftPrStep(task, opts);
@@ -56,10 +64,12 @@ const runIterations = async (
       );
       return true;
     }
+
     const followUp = formatFollowUp(review);
     reviewNotes = followUp.notes;
     console.log(followUp.log);
   }
+
   return false;
 };
 
@@ -69,6 +79,7 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
     ? createInterface({ input: process.stdin, output: process.stdout })
     : undefined;
   let loopTask = task;
+
   try {
     while (true) {
       const done = await runIterations(loopTask, opts, reviewers);
