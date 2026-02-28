@@ -1,4 +1,4 @@
-Please keep the code dead simple and keep the `src/loop/main.ts` file under 100 lines of code.
+Please keep the code dead-simple and keep the `src/loop/main.ts` file under 150 lines of code.
 
 # Quick Commands
 

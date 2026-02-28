@@ -1,6 +1,6 @@
 # loop
 
-Dead simple Bun CLI that runs `codex` and `claude` in a loop. The [main loop](https://github.com/axeldelafosse/loop/blob/main/src/loop/main.ts#L14) is ~50 lines of easy-to-read code.
+Dead-simple Bun CLI that runs `codex` and `claude` in a loop. The [main loop](https://github.com/axeldelafosse/loop/blob/main/src/loop/main.ts#L14) is ~50 lines of easy-to-read code.
 
 Install:
 ```bash

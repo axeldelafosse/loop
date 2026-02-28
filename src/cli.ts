@@ -25,6 +25,10 @@ export const runCli = async (argv: string[]): Promise<void> => {
     if (opts.tmux && cliDeps.runInTmux(argv)) {
       return;
     }
+    const gitWarning = cliDeps.checkGitState();
+    if (gitWarning) {
+      console.log(gitWarning);
+    }
     await cliDeps.maybeEnterWorktree(opts);
     const task = await cliDeps.resolveTask(opts);
     await cliDeps.runLoop(task, opts);
