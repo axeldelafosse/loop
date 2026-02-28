@@ -5,16 +5,13 @@ import { NEWLINE_RE } from "./constants";
 export const isFile = (path: string): boolean =>
   existsSync(path) && statSync(path).isFile();
 
-export const hasSignal = (text: string, signal: string): boolean =>
-  text
-    .split(NEWLINE_RE)
-    .map((line) => line.trim())
-    .some(
-      (line) =>
-        line === signal ||
-        line === `"${signal}"` ||
-        line.includes(`"${signal}"`)
-    );
+export const hasSignal = (text: string, signal: string): boolean => {
+  const quoted = `"${signal}"`;
+  return text.split(NEWLINE_RE).some((raw) => {
+    const line = raw.trim();
+    return line === signal || line === quoted || line.includes(quoted);
+  });
+};
 
 export const readPrompt = async (input: string): Promise<string> => {
   if (!isFile(input)) {

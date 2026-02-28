@@ -1,6 +1,5 @@
-import { REVIEW_FAIL, REVIEW_PASS } from "./constants";
+import { NEWLINE_RE, REVIEW_FAIL, REVIEW_PASS } from "./constants";
 
-const NEWLINE_RE = /\r?\n/;
 const SPAWN_TEAM_WITH_WORKTREE_ISOLATION =
   "Spawn a team of agents with worktree isolation.";
 
