@@ -177,6 +177,91 @@ test("parseArgs supports equals form for --review-plan=none", () => {
   expect(opts.reviewPlan).toBe("none");
 });
 
+test("parseArgs sets agent/review/reviewPlan to claude with --claude-only", () => {
+  const opts = parseArgs(["--claude-only", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("claude");
+  expect(opts.review).toBe("claude");
+  expect(opts.reviewPlan).toBe("claude");
+});
+
+test("parseArgs sets agent/review/reviewPlan to codex with --codex-only", () => {
+  const opts = parseArgs(["--codex-only", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("codex");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("codex");
+});
+
+test("parseArgs treats --claude alias like --claude-only", () => {
+  const opts = parseArgs(["--claude", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("claude");
+  expect(opts.review).toBe("claude");
+  expect(opts.reviewPlan).toBe("claude");
+});
+
+test("parseArgs treats --codex alias like --codex-only", () => {
+  const opts = parseArgs(["--codex", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("codex");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("codex");
+});
+
+test("parseArgs throws on conflicting --claude-only and --codex-only", () => {
+  expect(() => parseArgs(["--claude-only", "--codex-only"])).toThrow(
+    /--claude-only.*--codex-only|--codex-only.*--claude-only/
+  );
+});
+
+test("parseArgs throws on conflicting --claude and --codex aliases", () => {
+  expect(() => parseArgs(["--claude", "--codex"])).toThrow(
+    /--claude.*--codex|--codex.*--claude/
+  );
+});
+
+test("parseArgs allows explicit review-plan override after only-mode", () => {
+  const opts = parseArgs(["--codex-only", "--review-plan", "none"]);
+
+  expect(opts.agent).toBe("codex");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("none");
+});
+
+test("parseArgs accepts --codex with both --codex-model flag forms", () => {
+  const spaced = parseArgs([
+    "--codex",
+    "--codex-model",
+    "custom-spaced",
+    "--proof",
+    "verify",
+  ]);
+  const equals = parseArgs([
+    "--codex",
+    "--codex-model=custom-equals",
+    "--proof",
+    "verify",
+  ]);
+
+  expect(spaced.agent).toBe("codex");
+  expect(spaced.review).toBe("codex");
+  expect(spaced.reviewPlan).toBe("codex");
+  expect(spaced.model).toBe("custom-spaced");
+  expect(equals.agent).toBe("codex");
+  expect(equals.review).toBe("codex");
+  expect(equals.reviewPlan).toBe("codex");
+  expect(equals.model).toBe("custom-equals");
+});
+
+test("parseArgs lets --agent override only agent after only-mode", () => {
+  const opts = parseArgs(["--codex-only", "--agent", "claude", "--proof", "x"]);
+
+  expect(opts.agent).toBe("claude");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("codex");
+});
+
 test("parseArgs rejects invalid --review-plan value", () => {
   expect(() =>
     parseArgs(["--review-plan=claudex", "--proof", "verify"])
