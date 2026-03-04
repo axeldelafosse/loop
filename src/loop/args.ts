@@ -17,7 +17,7 @@ import type {
 
 const EMPTY_DONE_SIGNAL_ERROR = "Invalid --done value: cannot be empty";
 const ONLY_MODE_CONFLICT_ERROR =
-  "Cannot combine --claude-only/--claude with --codex-only/--codex.";
+  "Cannot combine --claude-only with --codex-only.";
 
 const parseAgent = (value: string): Agent => {
   if (value === "claude" || value === "codex") {
@@ -115,10 +115,10 @@ const applyOnlyMode = (agent: Agent, opts: Options): void => {
 };
 
 const parseOnlyModeFlag = (arg: string): Agent | undefined => {
-  if (arg === "--claude-only" || arg === "--claude") {
+  if (arg === "--claude-only") {
     return "claude";
   }
-  if (arg === "--codex-only" || arg === "--codex") {
+  if (arg === "--codex-only") {
     return "codex";
   }
   return undefined;

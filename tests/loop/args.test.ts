@@ -9,9 +9,8 @@ import {
 const ORIGINAL_LOOP_CODEX_MODEL = process.env.LOOP_CODEX_MODEL;
 const originalExit = process.exit;
 const originalLog = console.log;
-const CONFLICT_ONLY_MODE_RE =
-  /--claude-only.*--codex-only|--codex-only.*--claude-only/;
-const CONFLICT_ALIAS_RE = /--claude.*--codex|--codex.*--claude/;
+const CONFLICT_ONLY_MODE_ERROR =
+  "Cannot combine --claude-only with --codex-only.";
 
 const clearModelEnv = (): void => {
   Reflect.deleteProperty(process.env, "LOOP_CODEX_MODEL");
@@ -196,30 +195,13 @@ test("parseArgs sets agent/review/reviewPlan to codex with --codex-only", () => 
   expect(opts.reviewPlan).toBe("codex");
 });
 
-test("parseArgs treats --claude alias like --claude-only", () => {
-  const opts = parseArgs(["--claude", "--proof", "verify"]);
-
-  expect(opts.agent).toBe("claude");
-  expect(opts.review).toBe("claude");
-  expect(opts.reviewPlan).toBe("claude");
-});
-
-test("parseArgs treats --codex alias like --codex-only", () => {
-  const opts = parseArgs(["--codex", "--proof", "verify"]);
-
-  expect(opts.agent).toBe("codex");
-  expect(opts.review).toBe("codex");
-  expect(opts.reviewPlan).toBe("codex");
-});
-
 test("parseArgs throws on conflicting --claude-only and --codex-only", () => {
   expect(() => parseArgs(["--claude-only", "--codex-only"])).toThrow(
-    CONFLICT_ONLY_MODE_RE
+    CONFLICT_ONLY_MODE_ERROR
   );
-});
-
-test("parseArgs throws on conflicting --claude and --codex aliases", () => {
-  expect(() => parseArgs(["--claude", "--codex"])).toThrow(CONFLICT_ALIAS_RE);
+  expect(() => parseArgs(["--codex-only", "--claude-only"])).toThrow(
+    CONFLICT_ONLY_MODE_ERROR
+  );
 });
 
 test("parseArgs allows explicit review-plan override after only-mode", () => {
@@ -230,16 +212,16 @@ test("parseArgs allows explicit review-plan override after only-mode", () => {
   expect(opts.reviewPlan).toBe("none");
 });
 
-test("parseArgs accepts --codex with both --codex-model flag forms", () => {
+test("parseArgs accepts --codex-only with both --codex-model flag forms", () => {
   const spaced = parseArgs([
-    "--codex",
+    "--codex-only",
     "--codex-model",
     "custom-spaced",
     "--proof",
     "verify",
   ]);
   const equals = parseArgs([
-    "--codex",
+    "--codex-only",
     "--codex-model=custom-equals",
     "--proof",
     "verify",
@@ -301,6 +283,11 @@ test("parseArgs rejects empty done signals", () => {
 
 test("parseArgs throws for unknown flags", () => {
   expect(() => parseArgs(["--unknown"])).toThrow("Unknown argument: --unknown");
+});
+
+test("parseArgs rejects removed single-agent aliases", () => {
+  expect(() => parseArgs(["--claude"])).toThrow("Unknown argument: --claude");
+  expect(() => parseArgs(["--codex"])).toThrow("Unknown argument: --codex");
 });
 
 test("parseArgs throws when a value flag is missing its value", () => {

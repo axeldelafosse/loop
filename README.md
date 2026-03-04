@@ -134,8 +134,8 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 ## Options
 
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)
-- `--claude-only, --claude`: use Claude for work, review, and plan review
-- `--codex-only, --codex`: use Codex for work, review, and plan review
+- `--claude-only`: use Claude for work, review, and plan review
+- `--codex-only`: use Codex for work, review, and plan review
 - `-p, --prompt <text|.md file>`: prompt text or a `.md` prompt file path. Plain text auto-creates `PLAN.md` first.
 - `--proof <text>`: optional proof criteria for task completion
 - `--codex-model <model>`: set the model passed to codex (`LOOP_CODEX_MODEL` can also set this by default)
@@ -174,10 +174,6 @@ loop --claude-only --proof "Use {skill} to verify your changes" "Implement {feat
 
 # single-agent mode: codex for work, review, and plan review
 loop --codex-only --proof "Use {skill} to verify your changes" "Implement {feature}"
-
-# single-agent aliases (same behavior)
-loop --claude --proof "Use {skill} to verify your changes" "Implement {feature}"
-loop --codex --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run review with a single reviewer
 loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review codex

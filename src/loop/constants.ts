@@ -17,8 +17,8 @@ Usage:
 
 Options:
   -a, --agent <claude|codex>               Agent CLI to run (default: codex)
-  --claude-only, --claude                  Use Claude for work, review, and plan review
-  --codex-only, --codex                    Use Codex for work, review, and plan review
+  --claude-only                            Use Claude for work, review, and plan review
+  --codex-only                             Use Codex for work, review, and plan review
   -p, --prompt <text|.md file>             Prompt text or path to a .md prompt file
   -m, --max-iterations <number>            Max loops (default: infinite)
   -d, --done <signal>                      Done signal (default: <promise>DONE</promise>)
