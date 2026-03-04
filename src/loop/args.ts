@@ -16,6 +16,8 @@ import type {
 } from "./types";
 
 const EMPTY_DONE_SIGNAL_ERROR = "Invalid --done value: cannot be empty";
+const ONLY_MODE_CONFLICT_ERROR =
+  "Cannot combine --claude-only with --codex-only.";
 
 const parseAgent = (value: string): Agent => {
   if (value === "claude" || value === "codex") {
@@ -106,6 +108,29 @@ const applyValueFlag = (
   opts.format = parseFormat(value);
 };
 
+const applyOnlyMode = (agent: Agent, opts: Options): void => {
+  opts.agent = agent;
+  opts.review = agent;
+  opts.reviewPlan = agent;
+};
+
+const parseOnlyModeFlag = (arg: string): Agent | undefined => {
+  if (arg === "--claude-only") {
+    return "claude";
+  }
+  if (arg === "--codex-only") {
+    return "codex";
+  }
+  return undefined;
+};
+
+const resolveOnlyMode = (current: Agent | undefined, next: Agent): Agent => {
+  if (current && current !== next) {
+    throw new Error(ONLY_MODE_CONFLICT_ERROR);
+  }
+  return next;
+};
+
 const parseReviewArg = (
   argv: string[],
   index: number,
@@ -152,8 +177,9 @@ const consumeArg = (
   argv: string[],
   index: number,
   opts: Options,
-  positional: string[]
-): { nextIndex: number; stop: boolean } => {
+  positional: string[],
+  onlyAgent: Agent | undefined
+): { nextIndex: number; stop: boolean; onlyAgent: Agent | undefined } => {
   const arg = argv[index];
 
   if (arg === "-v" || arg === "--version") {
@@ -168,18 +194,29 @@ const consumeArg = (
 
   if (arg === "--") {
     positional.push(...argv.slice(index + 1));
-    return { nextIndex: argv.length, stop: true };
+    return { nextIndex: argv.length, stop: true, onlyAgent };
   }
 
   if (arg.startsWith("--codex-model=")) {
     applyValueFlag("codexModel", arg.slice("--codex-model=".length), opts);
-    return { nextIndex: index + 1, stop: false };
+    return { nextIndex: index + 1, stop: false, onlyAgent };
+  }
+
+  const modeAgent = parseOnlyModeFlag(arg);
+  if (modeAgent) {
+    applyOnlyMode(modeAgent, opts);
+    return {
+      nextIndex: index + 1,
+      stop: false,
+      onlyAgent: resolveOnlyMode(onlyAgent, modeAgent),
+    };
   }
 
   if (arg === "--review" || arg.startsWith("--review=")) {
     return {
       nextIndex: parseReviewArg(argv, index, opts, arg) + 1,
       stop: false,
+      onlyAgent,
     };
   }
 
@@ -187,17 +224,18 @@ const consumeArg = (
     return {
       nextIndex: parsePlanReviewArg(argv, index, opts, arg) + 1,
       stop: false,
+      onlyAgent,
     };
   }
 
   if (arg === "--tmux") {
     opts.tmux = true;
-    return { nextIndex: index + 1, stop: false };
+    return { nextIndex: index + 1, stop: false, onlyAgent };
   }
 
   if (arg === "--worktree") {
     opts.worktree = true;
-    return { nextIndex: index + 1, stop: false };
+    return { nextIndex: index + 1, stop: false, onlyAgent };
   }
 
   const flag = VALUE_FLAGS[arg];
@@ -207,7 +245,7 @@ const consumeArg = (
       throw new Error(`Missing value for ${arg}`);
     }
     applyValueFlag(flag, value, opts);
-    return { nextIndex: index + 2, stop: false };
+    return { nextIndex: index + 2, stop: false, onlyAgent };
   }
 
   if (arg.startsWith("-")) {
@@ -215,7 +253,7 @@ const consumeArg = (
   }
 
   positional.push(arg);
-  return { nextIndex: index + 1, stop: false };
+  return { nextIndex: index + 1, stop: false, onlyAgent };
 };
 
 export const parseArgs = (argv: string[]): Options => {
@@ -231,10 +269,16 @@ export const parseArgs = (argv: string[]): Options => {
     worktree: false,
   };
   const positional: string[] = [];
+  let onlyAgent: Agent | undefined;
 
   for (let index = 0; index < argv.length; ) {
-    const { nextIndex, stop } = consumeArg(argv, index, opts, positional);
+    const {
+      nextIndex,
+      stop,
+      onlyAgent: nextOnlyAgent,
+    } = consumeArg(argv, index, opts, positional, onlyAgent);
     index = nextIndex;
+    onlyAgent = nextOnlyAgent;
     if (stop) {
       break;
     }

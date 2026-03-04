@@ -34,7 +34,7 @@ export const buildPlanPrompt = (task: string): string =>
     "Plan mode:",
     `Task:\n${task.trim()}`,
     "Create or update PLAN.md in the current repo with a clear implementation plan.",
-    "Only write the plan in this step. Do not implement code yet.",
+    "Only write the plan in this step. Enter plan mode. Do not implement code yet.",
   ].join("\n\n");
 
 export const buildPlanReviewPrompt = (task: string): string =>
@@ -43,7 +43,7 @@ export const buildPlanReviewPrompt = (task: string): string =>
     `Task:\n${task.trim()}`,
     "Review PLAN.md for correctness, missing steps, and verification gaps.",
     "Update PLAN.md directly if needed.",
-    "Only edit PLAN.md in this step. Do not implement code yet.",
+    "Only edit PLAN.md in this step. Enter plan mode. Do not implement code yet.",
   ].join("\n\n");
 
 export const buildWorkPrompt = (

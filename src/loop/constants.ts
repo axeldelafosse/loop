@@ -14,9 +14,13 @@ Usage:
   loop [options] [prompt]
   loop update                              Check for updates and apply if available
   loop upgrade                             Alias for update
+  claude-loop [options] [prompt]           Alias for: loop --claude-only
+  codex-loop [options] [prompt]            Alias for: loop --codex-only
 
 Options:
   -a, --agent <claude|codex>               Agent CLI to run (default: codex)
+  --claude-only                            Use Claude for work, review, and plan review
+  --codex-only                             Use Codex for work, review, and plan review
   -p, --prompt <text|.md file>             Prompt text or path to a .md prompt file
   -m, --max-iterations <number>            Max loops (default: infinite)
   -d, --done <signal>                      Done signal (default: <promise>DONE</promise>)

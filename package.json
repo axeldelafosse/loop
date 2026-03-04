@@ -11,6 +11,8 @@
     "fix": "ultracite fix"
   },
   "bin": {
+    "claude-loop": "./src/claude-loop.ts",
+    "codex-loop": "./src/codex-loop.ts",
     "loop": "./src/cli.ts"
   },
   "devDependencies": {
