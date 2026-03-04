@@ -51,7 +51,7 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash
 ```
 
-Installer currently supports macOS and Linux and installs to `~/.local/bin/loop` by default.
+Installer currently supports macOS and Linux and installs `loop`, `claude-loop`, and `codex-loop` to `~/.local/bin` by default.
 
 ## Quick start
 
@@ -85,7 +85,7 @@ bun run install:global
 loop --help
 ```
 
-This creates `~/.local/bin/loop` on Unix and `~/.local/bin/loop.exe` on Windows.
+This creates `loop`, `claude-loop`, and `codex-loop` in `~/.local/bin` on Unix, and `loop.exe` plus `claude-loop.cmd`/`codex-loop.cmd` on Windows.
 
 If `loop` is not found, add this to `~/.zshrc`:
 
@@ -133,6 +133,8 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 
 ## Options
 
+- `claude-loop`: shorthand for `loop --claude-only`
+- `codex-loop`: shorthand for `loop --codex-only`
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)
 - `--claude-only`: use Claude for work, review, and plan review
 - `--codex-only`: use Codex for work, review, and plan review
@@ -174,6 +176,10 @@ loop --claude-only --proof "Use {skill} to verify your changes" "Implement {feat
 
 # single-agent mode: codex for work, review, and plan review
 loop --codex-only --proof "Use {skill} to verify your changes" "Implement {feature}"
+
+# shorthand commands
+claude-loop --proof "Use {skill} to verify your changes" "Implement {feature}"
+codex-loop --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run review with a single reviewer
 loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review codex

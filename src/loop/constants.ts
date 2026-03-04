@@ -14,6 +14,8 @@ Usage:
   loop [options] [prompt]
   loop update                              Check for updates and apply if available
   loop upgrade                             Alias for update
+  claude-loop [options] [prompt]           Alias for: loop --claude-only
+  codex-loop [options] [prompt]            Alias for: loop --codex-only
 
 Options:
   -a, --agent <claude|codex>               Agent CLI to run (default: codex)

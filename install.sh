@@ -14,6 +14,8 @@ RELEASES_BASE="https://github.com/${REPO}/releases"
 INSTALL_DIR="${LOOP_INSTALL_DIR:-$HOME/.local/bin}"
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loop-install.XXXXXX")"
 TARGET_PATH="${INSTALL_DIR}/loop"
+CLAUDE_LOOP_PATH="${INSTALL_DIR}/claude-loop"
+CODEX_LOOP_PATH="${INSTALL_DIR}/codex-loop"
 
 trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
 
@@ -129,7 +131,21 @@ mkdir -p "$INSTALL_DIR"
 chmod +x "$binary_path"
 cp "$binary_path" "$TARGET_PATH"
 
+cat > "$CLAUDE_LOOP_PATH" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/loop" --claude-only "$@"
+EOF
+
+cat > "$CODEX_LOOP_PATH" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/loop" --codex-only "$@"
+EOF
+
+chmod +x "$CLAUDE_LOOP_PATH" "$CODEX_LOOP_PATH"
+
 echo "Installed loop -> $TARGET_PATH"
+echo "Installed claude-loop -> $CLAUDE_LOOP_PATH"
+echo "Installed codex-loop -> $CODEX_LOOP_PATH"
 
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
