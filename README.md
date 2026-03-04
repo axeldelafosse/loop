@@ -26,6 +26,34 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 - Addresses the comments automatically
 - Creates a draft PR
 
+```mermaid
+flowchart TD
+    Start([start]) --> Resolve[Resolve reviewers]
+    Resolve --> Build[Build work prompt]
+    Build --> Agent[Run agent]
+    Agent --> Done{Done signal?}
+
+    Done -- "No · exit ≠ 0" --> Error([error])
+    Done -- "No · exit 0" --> MaxCheck{Max iterations?}
+    MaxCheck -- No --> Build
+    MaxCheck -- Yes --> NotDone[not done]
+
+    Done -- Yes --> HasReview{Reviewers?}
+    HasReview -- No --> Success[done]
+    HasReview -- Yes --> Review[Run review]
+    Review --> Result{Result}
+    Result -- Approved --> PR[Draft PR] --> Success
+    Result -- "Both rejected" --> Combined[Combine notes] --> MaxCheck
+    Result -- "One rejected" --> Notes[Pass notes] --> MaxCheck
+
+    Success --> TTY{Interactive?}
+    NotDone --> TTY
+    TTY -- No --> Exit([exit])
+    TTY -- Yes --> Ask[Follow-up prompt]
+    Ask -- blank --> Exit
+    Ask -- text --> Append[Append to task] --> Build
+```
+
 ## Setup
 
 **IMPORTANT**: you SHOULD run this inside a VM. It is NOT safe to run this on your host machine. The agents are running in YOLO mode!
