@@ -175,6 +175,10 @@ loop --claude-only --proof "Use {skill} to verify your changes" "Implement {feat
 # single-agent mode: codex for work, review, and plan review
 loop --codex-only --proof "Use {skill} to verify your changes" "Implement {feature}"
 
+# single-agent aliases (same behavior)
+loop --claude --proof "Use {skill} to verify your changes" "Implement {feature}"
+loop --codex --proof "Use {skill} to verify your changes" "Implement {feature}"
+
 # run review with a single reviewer
 loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review codex
 
