@@ -9,6 +9,9 @@ import {
 const ORIGINAL_LOOP_CODEX_MODEL = process.env.LOOP_CODEX_MODEL;
 const originalExit = process.exit;
 const originalLog = console.log;
+const CONFLICT_ONLY_MODE_RE =
+  /--claude-only.*--codex-only|--codex-only.*--claude-only/;
+const CONFLICT_ALIAS_RE = /--claude.*--codex|--codex.*--claude/;
 
 const clearModelEnv = (): void => {
   Reflect.deleteProperty(process.env, "LOOP_CODEX_MODEL");
@@ -211,14 +214,12 @@ test("parseArgs treats --codex alias like --codex-only", () => {
 
 test("parseArgs throws on conflicting --claude-only and --codex-only", () => {
   expect(() => parseArgs(["--claude-only", "--codex-only"])).toThrow(
-    /--claude-only.*--codex-only|--codex-only.*--claude-only/
+    CONFLICT_ONLY_MODE_RE
   );
 });
 
 test("parseArgs throws on conflicting --claude and --codex aliases", () => {
-  expect(() => parseArgs(["--claude", "--codex"])).toThrow(
-    /--claude.*--codex|--codex.*--claude/
-  );
+  expect(() => parseArgs(["--claude", "--codex"])).toThrow(CONFLICT_ALIAS_RE);
 });
 
 test("parseArgs allows explicit review-plan override after only-mode", () => {

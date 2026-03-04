@@ -16,6 +16,8 @@ import type {
 } from "./types";
 
 const EMPTY_DONE_SIGNAL_ERROR = "Invalid --done value: cannot be empty";
+const ONLY_MODE_CONFLICT_ERROR =
+  "Cannot combine --claude-only/--claude with --codex-only/--codex.";
 
 const parseAgent = (value: string): Agent => {
   if (value === "claude" || value === "codex") {
@@ -112,6 +114,23 @@ const applyOnlyMode = (agent: Agent, opts: Options): void => {
   opts.reviewPlan = agent;
 };
 
+const parseOnlyModeFlag = (arg: string): Agent | undefined => {
+  if (arg === "--claude-only" || arg === "--claude") {
+    return "claude";
+  }
+  if (arg === "--codex-only" || arg === "--codex") {
+    return "codex";
+  }
+  return undefined;
+};
+
+const resolveOnlyMode = (current: Agent | undefined, next: Agent): Agent => {
+  if (current && current !== next) {
+    throw new Error(ONLY_MODE_CONFLICT_ERROR);
+  }
+  return next;
+};
+
 const parseReviewArg = (
   argv: string[],
   index: number,
@@ -183,21 +202,14 @@ const consumeArg = (
     return { nextIndex: index + 1, stop: false, onlyAgent };
   }
 
-  if (
-    arg === "--claude-only" ||
-    arg === "--claude" ||
-    arg === "--codex-only" ||
-    arg === "--codex"
-  ) {
-    const modeAgent: Agent =
-      arg === "--claude-only" || arg === "--claude" ? "claude" : "codex";
-    if (onlyAgent && onlyAgent !== modeAgent) {
-      throw new Error(
-        "Cannot combine --claude-only/--claude with --codex-only/--codex."
-      );
-    }
+  const modeAgent = parseOnlyModeFlag(arg);
+  if (modeAgent) {
     applyOnlyMode(modeAgent, opts);
-    return { nextIndex: index + 1, stop: false, onlyAgent: modeAgent };
+    return {
+      nextIndex: index + 1,
+      stop: false,
+      onlyAgent: resolveOnlyMode(onlyAgent, modeAgent),
+    };
   }
 
   if (arg === "--review" || arg.startsWith("--review=")) {
@@ -260,13 +272,11 @@ export const parseArgs = (argv: string[]): Options => {
   let onlyAgent: Agent | undefined;
 
   for (let index = 0; index < argv.length; ) {
-    const { nextIndex, stop, onlyAgent: nextOnlyAgent } = consumeArg(
-      argv,
-      index,
-      opts,
-      positional,
-      onlyAgent
-    );
+    const {
+      nextIndex,
+      stop,
+      onlyAgent: nextOnlyAgent,
+    } = consumeArg(argv, index, opts, positional, onlyAgent);
     index = nextIndex;
     onlyAgent = nextOnlyAgent;
     if (stop) {
