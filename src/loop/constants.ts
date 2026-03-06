@@ -2,7 +2,7 @@ import pkg from "../../package.json";
 import type { ValueFlag } from "./types";
 
 export const DEFAULT_DONE_SIGNAL = "<promise>DONE</promise>";
-export const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
+export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_CLAUDE_MODEL = "opus";
 export const LOOP_VERSION = pkg.version;
 
