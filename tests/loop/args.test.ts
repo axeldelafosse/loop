@@ -73,7 +73,7 @@ test("parseArgs returns expected defaults when proof is omitted", () => {
   expect(opts.proof).toBe("");
   expect(opts.format).toBe("pretty");
   expect(opts.maxIterations).toBe(Number.POSITIVE_INFINITY);
-  expect(opts.model).toBe(DEFAULT_CODEX_MODEL);
+  expect(opts.codexModel).toBe(DEFAULT_CODEX_MODEL);
   expect(opts.promptInput).toBeUndefined();
   expect(opts.review).toBe("claudex");
   expect(opts.reviewPlan).toBeUndefined();
@@ -85,7 +85,7 @@ test("parseArgs uses LOOP_CODEX_MODEL when present", () => {
   process.env.LOOP_CODEX_MODEL = "test-model";
   const opts = parseArgs(["--proof", "verify with tests"]);
 
-  expect(opts.model).toBe("test-model");
+  expect(opts.codexModel).toBe("test-model");
 });
 
 test("parseArgs uses --codex-model when provided", () => {
@@ -96,14 +96,14 @@ test("parseArgs uses --codex-model when provided", () => {
     "verify",
   ]);
 
-  expect(opts.model).toBe("custom-model");
+  expect(opts.codexModel).toBe("custom-model");
 });
 
 test("parseArgs with --codex-model= overrides LOOP_CODEX_MODEL", () => {
   process.env.LOOP_CODEX_MODEL = "env-model";
   const opts = parseArgs(["--codex-model=flag-model", "--proof", "verify"]);
 
-  expect(opts.model).toBe("flag-model");
+  expect(opts.codexModel).toBe("flag-model");
 });
 
 test("parseArgs handles all value flags and explicit reviewer", () => {
@@ -123,6 +123,10 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
     "--review=claudex",
     "--codex-model",
     "custom-model",
+    "--codex-reviewer-model",
+    "codex-review",
+    "--claude-reviewer-model",
+    "claude-review",
   ]);
 
   expect(opts.agent).toBe("claude");
@@ -132,7 +136,9 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
   expect(opts.proof).toBe("verify this");
   expect(opts.format).toBe("pretty");
   expect(opts.review).toBe("claudex");
-  expect(opts.model).toBe("custom-model");
+  expect(opts.codexModel).toBe("custom-model");
+  expect(opts.codexReviewerModel).toBe("codex-review");
+  expect(opts.claudeReviewerModel).toBe("claude-review");
 });
 
 test("parseArgs treats bare --review as claudex when no reviewer follows", () => {
@@ -230,11 +236,42 @@ test("parseArgs accepts --codex-only with both --codex-model flag forms", () => 
   expect(spaced.agent).toBe("codex");
   expect(spaced.review).toBe("codex");
   expect(spaced.reviewPlan).toBe("codex");
-  expect(spaced.model).toBe("custom-spaced");
+  expect(spaced.codexModel).toBe("custom-spaced");
   expect(equals.agent).toBe("codex");
   expect(equals.review).toBe("codex");
   expect(equals.reviewPlan).toBe("codex");
-  expect(equals.model).toBe("custom-equals");
+  expect(equals.codexModel).toBe("custom-equals");
+});
+
+test("parseArgs accepts both reviewer-model flag forms", () => {
+  const spaced = parseArgs([
+    "--codex-reviewer-model",
+    "codex-review",
+    "--claude-reviewer-model",
+    "claude-review",
+    "--proof",
+    "verify",
+  ]);
+  const equals = parseArgs([
+    "--codex-reviewer-model=codex-equals",
+    "--claude-reviewer-model=claude-equals",
+    "--proof",
+    "verify",
+  ]);
+
+  expect(spaced.codexReviewerModel).toBe("codex-review");
+  expect(spaced.claudeReviewerModel).toBe("claude-review");
+  expect(equals.codexReviewerModel).toBe("codex-equals");
+  expect(equals.claudeReviewerModel).toBe("claude-equals");
+});
+
+test("parseArgs rejects empty reviewer model values", () => {
+  expect(() =>
+    parseArgs(["--codex-reviewer-model", "   ", "--proof", "verify"])
+  ).toThrow("Invalid --codex-reviewer-model value: cannot be empty");
+  expect(() =>
+    parseArgs(["--claude-reviewer-model=", "--proof", "verify"])
+  ).toThrow("Invalid --claude-reviewer-model value: cannot be empty");
 });
 
 test("parseArgs lets --agent override only agent after only-mode", () => {

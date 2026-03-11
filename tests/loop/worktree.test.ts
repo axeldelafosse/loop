@@ -7,7 +7,7 @@ const makeOptions = (overrides: Partial<Options> = {}): Options => ({
   doneSignal: "<done/>",
   format: "raw",
   maxIterations: 5,
-  model: "test-model",
+  codexModel: "test-model",
   proof: "verify with tests",
   review: "claudex",
   tmux: false,

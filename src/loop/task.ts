@@ -1,5 +1,5 @@
 import { buildPlanPrompt, buildPlanReviewPrompt } from "./prompts";
-import { runAgent } from "./runner";
+import { runAgent, runReviewerAgent } from "./runner";
 import type { Agent, Options, PlanReviewMode } from "./types";
 import { isFile, readPrompt } from "./utils";
 
@@ -47,7 +47,7 @@ const runPlanMode = async (opts: Options, task: string): Promise<void> => {
   }
   console.log(`\n[loop] reviewing PLAN.md with ${reviewer}.`);
   const reviewPrompt = buildPlanReviewPrompt(task);
-  const review = await runAgent(reviewer, reviewPrompt, opts);
+  const review = await runReviewerAgent(reviewer, reviewPrompt, opts);
   if (review.exitCode !== 0) {
     throw new Error(
       `[loop] plan review ${reviewer} exited with code ${review.exitCode}`

@@ -1,6 +1,6 @@
 import { NEWLINE_RE, REVIEW_FAIL, REVIEW_PASS } from "./constants";
 import { buildReviewPrompt } from "./prompts";
-import { runAgent } from "./runner";
+import { runReviewerAgent } from "./runner";
 import type {
   Agent,
   Options,
@@ -332,4 +332,5 @@ export const runReview = async (
   reviewers: Agent[],
   task: string,
   opts: Options
-): Promise<ReviewResult> => runReviewWith(runAgent, reviewers, task, opts);
+): Promise<ReviewResult> =>
+  runReviewWith(runReviewerAgent, reviewers, task, opts);

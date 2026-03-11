@@ -429,11 +429,11 @@ class AppServerClient {
       throw new CodexAppServerFallbackError("codex app-server not running");
     }
 
-    const threadId = await this.ensureThread(opts.model, resumeThreadId);
+    const threadId = await this.ensureThread(opts.codexModel, resumeThreadId);
     const response = await this.sendRequest(METHOD_TURN_START, {
       threadId,
       input: buildInput(prompt),
-      model: opts.model,
+      model: opts.codexModel,
       effort: null,
       cwd: null,
     });

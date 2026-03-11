@@ -204,6 +204,7 @@ class ClaudeSdkClient {
   private closed = false;
   private lastSessionId = "";
   private lock: Promise<void> = Promise.resolve();
+  private model = DEFAULT_CLAUDE_MODEL;
   private port = 0;
   private ready = false;
   private resumeId = "";
@@ -231,6 +232,10 @@ class ClaudeSdkClient {
 
   setResumeId(id: string): void {
     this.resumeId = id;
+  }
+
+  setModel(model: string): void {
+    this.model = model;
   }
 
   async start(): Promise<void> {
@@ -267,7 +272,7 @@ class ClaudeSdkClient {
           "stream-json",
           "--verbose",
           "--model",
-          DEFAULT_CLAUDE_MODEL,
+          this.model,
           "--dangerously-skip-permissions",
           "--sdk-url",
           url,
@@ -712,9 +717,11 @@ const getClient = (): ClaudeSdkClient => {
 };
 
 export const startClaudeSdk = async (
+  model = DEFAULT_CLAUDE_MODEL,
   resumeSessionId?: string
 ): Promise<void> => {
   const client = getClient();
+  client.setModel(model);
   if (resumeSessionId) {
     client.setResumeId(resumeSessionId);
   }

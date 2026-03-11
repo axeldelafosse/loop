@@ -9,7 +9,7 @@ const makeOptions = (overrides: Partial<Options> = {}): Options => ({
   proof: "verify with tests",
   format: "raw",
   maxIterations: 2,
-  model: "test-model",
+  codexModel: "test-model",
   review: "claudex",
   ...overrides,
 });

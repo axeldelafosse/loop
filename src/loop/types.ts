@@ -9,15 +9,19 @@ export type ValueFlag =
   | "done"
   | "proof"
   | "codexModel"
+  | "codexReviewerModel"
+  | "claudeReviewerModel"
   | "format"
   | "session";
 
 export interface Options {
   agent: Agent;
+  claudeReviewerModel?: string;
+  codexModel: string;
+  codexReviewerModel?: string;
   doneSignal: string;
   format: Format;
   maxIterations: number;
-  model: string;
   promptInput?: string;
   proof: string;
   review?: ReviewMode;

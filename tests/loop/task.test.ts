@@ -10,7 +10,7 @@ const makeOptions = (
   proof: "verify with tests",
   format: "raw",
   maxIterations: 5,
-  model: "test-model",
+  codexModel: "test-model",
   ...(promptInput ? { promptInput } : {}),
   ...overrides,
 });
@@ -49,7 +49,10 @@ const loadResolveTask = async (deps: TaskDeps = {}) => {
     readPrompt: readPromptMock,
     hasSignal: realUtils.hasSignal,
   }));
-  mock.module("../../src/loop/runner", () => ({ runAgent: runAgentMock }));
+  mock.module("../../src/loop/runner", () => ({
+    runAgent: runAgentMock,
+    runReviewerAgent: runAgentMock,
+  }));
 
   const { resolveTask } = await import("../../src/loop/task");
   return { isFileMock, readPromptMock, resolveTask, runAgentMock };

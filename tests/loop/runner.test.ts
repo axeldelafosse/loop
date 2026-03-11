@@ -1,6 +1,5 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { resolve } from "node:path";
-import { DEFAULT_CLAUDE_MODEL } from "../../src/loop/constants";
 import type { Options, RunResult } from "../../src/loop/types";
 
 interface AppServerModule {
@@ -12,6 +11,7 @@ const CODEX_TRANSPORT_EXEC = "exec";
 const projectRoot = process.cwd();
 const runnerPath = resolve(projectRoot, "src/loop/runner.ts");
 const runnerImportPath = `${runnerPath}?runner-test`;
+const claudeSdkPath = resolve(projectRoot, "src/loop/claude-sdk-server.ts");
 const codexAppServerPath = resolve(projectRoot, "src/loop/codex-app-server.ts");
 
 type MockFn<T extends (...args: unknown[]) => unknown> = ReturnType<
@@ -27,10 +27,10 @@ const makeResult = (overrides: Partial<RunResult> = {}): RunResult => ({
 
 const makeOptions = (opts: Partial<Options> = {}): Options => ({
   agent: "codex",
+  codexModel: "test-model",
   doneSignal: "<done/>",
   format: "raw",
   maxIterations: 1,
-  model: "test-model",
   proof: "verify",
   ...opts,
 });
@@ -54,9 +54,38 @@ const runCodexTurn: MockFn<
   ) => Promise<RunResult>
 > = mock(async () => makeResult());
 const runLegacyAgent: MockFn<
-  (agent: string, prompt: string, opts: Options) => Promise<RunResult>
+  (
+    agent: string,
+    prompt: string,
+    opts: Options,
+    sessionId?: string,
+    kind?: string
+  ) => Promise<RunResult>
 > = mock(async () => makeResult());
+const hasClaudeSdkProcess: MockFn<() => boolean> = mock(() => false);
+const interruptClaudeSdk: MockFn<(signal: "SIGINT" | "SIGTERM") => void> = mock(
+  () => undefined
+);
+const runClaudeTurn: MockFn<
+  (
+    _prompt: string,
+    _opts: Options,
+    _callbacks: {
+      onDelta: (text: string) => void;
+      onParsed: (text: string) => void;
+      onRaw: (text: string) => void;
+    }
+  ) => Promise<RunResult>
+> = mock(async () => makeResult());
+const startClaudeSdk: MockFn<
+  (model?: string, sessionId?: string) => Promise<void>
+> = mock(async () => undefined);
 let runAgent: (
+  agent: string,
+  prompt: string,
+  opts: Options
+) => Promise<RunResult>;
+let runReviewerAgent: (
   agent: string,
   prompt: string,
   opts: Options
@@ -92,13 +121,24 @@ const installCodexServerMock = (): void => {
   }));
 };
 
+const installClaudeSdkMock = (): void => {
+  mock.module(claudeSdkPath, () => ({
+    hasClaudeSdkProcess,
+    interruptClaudeSdk,
+    runClaudeTurn,
+    startClaudeSdk,
+  }));
+};
+
 mock.restore();
 installCodexServerMock();
+installClaudeSdkMock();
 
 beforeEach(async () => {
   mock.restore();
   installCodexServerMock();
-  ({ runAgent, buildCommand, runnerInternals } = await import(
+  installClaudeSdkMock();
+  ({ runAgent, runReviewerAgent, buildCommand, runnerInternals } = await import(
     runnerImportPath
   ));
   process.env[CODEX_TRANSPORT_ENV] = "";
@@ -111,6 +151,13 @@ beforeEach(async () => {
   runCodexTurn.mockResolvedValue(makeResult());
   runLegacyAgent.mockReset();
   runLegacyAgent.mockResolvedValue(makeResult());
+  hasClaudeSdkProcess.mockReset();
+  hasClaudeSdkProcess.mockReturnValue(false);
+  interruptClaudeSdk.mockReset();
+  runClaudeTurn.mockReset();
+  runClaudeTurn.mockResolvedValue(makeResult());
+  startClaudeSdk.mockReset();
+  startClaudeSdk.mockResolvedValue(undefined);
   useAppServer.mockReset();
   useAppServer.mockImplementation(
     () => process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC
@@ -136,15 +183,15 @@ test("runAgent uses app-server transport by default", async () => {
   expect(runnerInternals).toBeDefined();
 });
 
-test("buildCommand uses Opus for Claude regardless of codex-model override", () => {
+test("buildCommand uses the provided Claude model", () => {
   const command = buildCommand(
     "claude",
     "summarize the issue",
-    "gpt-5.3-codex-spark"
+    "sonnet-review"
   );
   const modelArgIndex = command.args.indexOf("--model");
   expect(modelArgIndex).toBeGreaterThan(-1);
-  expect(command.args[modelArgIndex + 1]).toBe(DEFAULT_CLAUDE_MODEL);
+  expect(command.args[modelArgIndex + 1]).toBe("sonnet-review");
 });
 
 test("runAgent honors CODEX_TRANSPORT=exec and uses legacy codex exec", async () => {
@@ -177,6 +224,32 @@ test("runAgent propagates turn/completed failure exit code", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.parsed).toBe("failed");
+});
+
+test("runReviewerAgent uses codex reviewer model for codex reviews", async () => {
+  process.env[CODEX_TRANSPORT_ENV] = CODEX_TRANSPORT_EXEC;
+  runnerInternals.setUseAppServer(() => false);
+
+  await runReviewerAgent(
+    "codex",
+    "review this",
+    makeOptions({ codexReviewerModel: "codex-review" })
+  );
+
+  expect(runLegacyAgent).toHaveBeenCalledTimes(1);
+  expect(runLegacyAgent.mock.calls[0]?.[2]).toMatchObject({
+    codexModel: "codex-review",
+  });
+});
+
+test("runReviewerAgent uses claude reviewer model for claude reviews", async () => {
+  await runReviewerAgent(
+    "claude",
+    "review this",
+    makeOptions({ claudeReviewerModel: "claude-review" })
+  );
+
+  expect(startClaudeSdk).toHaveBeenCalledWith("claude-review", undefined);
 });
 
 test("runAgent inserts pretty-mode blank line after message completion", async () => {

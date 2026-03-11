@@ -164,7 +164,7 @@ const makeOptions = (): Options => ({
   doneSignal: "<done/>",
   format: "raw",
   maxIterations: 1,
-  model: "test-model",
+  codexModel: "test-model",
   proof: "proof",
 });
 

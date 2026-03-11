@@ -21,6 +21,7 @@ import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Agent, Options, RunResult } from "./types";
 
 type ExitSignal = "SIGINT" | "SIGTERM";
+type AgentRunKind = "review" | "work";
 interface SpawnConfig {
   args: string[];
   cmd: string;
@@ -30,7 +31,8 @@ type LegacyAgentRunner = (
   agent: Agent,
   prompt: string,
   opts: Options,
-  sessionId?: string
+  sessionId?: string,
+  kind?: AgentRunKind
 ) => Promise<RunResult>;
 interface RunnerState {
   runLegacyAgent: LegacyAgentRunner;
@@ -48,8 +50,8 @@ let activeClaudeSdkRuns = 0;
 let watchingSignals = false;
 let fallbackWarned = false;
 const runnerState: RunnerState = {
-  runLegacyAgent: (agent, prompt, opts, sessionId) =>
-    runLegacyAgent(agent, prompt, opts, sessionId),
+  runLegacyAgent: (agent, prompt, opts, sessionId, kind) =>
+    runLegacyAgent(agent, prompt, opts, sessionId, kind),
   useAppServer: () => useAppServer(),
 };
 
@@ -119,7 +121,7 @@ export const buildCommand = (
       "stream-json",
       "--verbose",
       "--model",
-      DEFAULT_CLAUDE_MODEL,
+      model,
     ];
     if (sessionId) {
       args.push("--resume", sessionId);
@@ -140,6 +142,29 @@ export const buildCommand = (
     ],
     cmd: "codex",
   };
+};
+
+const resolveModel = (
+  agent: Agent,
+  opts: Options,
+  kind: AgentRunKind
+): string => {
+  if (agent === "codex") {
+    return kind === "review"
+      ? (opts.codexReviewerModel ?? opts.codexModel)
+      : opts.codexModel;
+  }
+
+  return kind === "review"
+    ? (opts.claudeReviewerModel ?? DEFAULT_CLAUDE_MODEL)
+    : DEFAULT_CLAUDE_MODEL;
+};
+
+const withCodexModel = (opts: Options, model: string): Options => {
+  if (opts.codexModel === model) {
+    return opts;
+  }
+  return { ...opts, codexModel: model };
 };
 
 const eventMessage = (line: string): string => {
@@ -248,14 +273,22 @@ const appendParsedLine = (
 const runCodexAgent = async (
   prompt: string,
   opts: Options,
-  sessionId?: string
+  sessionId?: string,
+  kind: AgentRunKind = "work"
 ): Promise<RunResult> => {
+  const runOpts = withCodexModel(opts, resolveModel("codex", opts, kind));
   if (!runnerState.useAppServer()) {
-    return runnerState.runLegacyAgent("codex", prompt, opts);
+    return runnerState.runLegacyAgent(
+      "codex",
+      prompt,
+      runOpts,
+      sessionId,
+      kind
+    );
   }
 
   const renderer = createCodexRenderer({
-    format: opts.format,
+    format: runOpts.format,
     write: (text) => {
       process.stdout.write(text);
     },
@@ -277,13 +310,13 @@ const runCodexAgent = async (
 
     const result = await runCodexTurn(
       prompt,
-      opts,
+      runOpts,
       { onRaw: renderer.onRawLine },
       sessionId
     );
     const finalParsed = result.parsed || renderer.getParsed();
     if (
-      opts.format === "pretty" &&
+      runOpts.format === "pretty" &&
       renderer.wrotePretty() &&
       !finalParsed.endsWith("\n")
     ) {
@@ -301,7 +334,13 @@ const runCodexAgent = async (
           "[loop] codex app-server transport failed. Falling back to `codex exec --json`."
         );
       }
-      return runnerState.runLegacyAgent("codex", prompt, opts);
+      return runnerState.runLegacyAgent(
+        "codex",
+        prompt,
+        runOpts,
+        sessionId,
+        kind
+      );
     }
     throw error;
   } finally {
@@ -314,9 +353,15 @@ const runLegacyAgent = async (
   agent: Agent,
   prompt: string,
   opts: Options,
-  sessionId?: string
+  sessionId?: string,
+  kind: AgentRunKind = "work"
 ): Promise<RunResult> => {
-  const { args, cmd } = buildCommand(agent, prompt, opts.model, sessionId);
+  const { args, cmd } = buildCommand(
+    agent,
+    prompt,
+    resolveModel(agent, opts, kind),
+    sessionId
+  );
   const proc = spawn([cmd, ...args], {
     detached: DETACH_CHILD_PROCESS,
     env: process.env,
@@ -392,8 +437,9 @@ const defaultRunLegacyAgent: LegacyAgentRunner = (
   agent: Agent,
   prompt: string,
   opts: Options,
-  sessionId?: string
-): Promise<RunResult> => runLegacyAgent(agent, prompt, opts, sessionId);
+  sessionId?: string,
+  kind?: AgentRunKind
+): Promise<RunResult> => runLegacyAgent(agent, prompt, opts, sessionId, kind);
 
 export const runnerInternals = {
   reset(): void {
@@ -411,8 +457,10 @@ export const runnerInternals = {
 const runClaudeAgent = async (
   prompt: string,
   opts: Options,
-  sessionId?: string
+  sessionId?: string,
+  kind: AgentRunKind = "work"
 ): Promise<RunResult> => {
+  const model = resolveModel("claude", opts, kind);
   let parsed = "";
   let state = { parsed: "", prettyCount: 0, lastMessage: "" };
   const onParsed = (text: string): void => {
@@ -433,7 +481,7 @@ const runClaudeAgent = async (
   activeClaudeSdkRuns += 1;
   syncSignalHandlers();
   try {
-    await startClaudeSdk(sessionId);
+    await startClaudeSdk(model, sessionId);
     const result = await runClaudeTurn(prompt, opts, {
       onDelta,
       onParsed,
@@ -446,17 +494,33 @@ const runClaudeAgent = async (
   }
 };
 
+const runAgentWithKind = (
+  agent: Agent,
+  prompt: string,
+  opts: Options,
+  sessionId?: string,
+  kind: AgentRunKind = "work"
+): Promise<RunResult> => {
+  if (agent === "codex") {
+    return runCodexAgent(prompt, opts, sessionId, kind);
+  }
+  if (agent === "claude") {
+    return runClaudeAgent(prompt, opts, sessionId, kind);
+  }
+  return runLegacyAgent(agent, prompt, opts, sessionId, kind);
+};
+
 export const runAgent = (
   agent: Agent,
   prompt: string,
   opts: Options,
   sessionId?: string
-): Promise<RunResult> => {
-  if (agent === "codex") {
-    return runCodexAgent(prompt, opts, sessionId);
-  }
-  if (agent === "claude") {
-    return runClaudeAgent(prompt, opts, sessionId);
-  }
-  return runLegacyAgent(agent, prompt, opts, sessionId);
-};
+): Promise<RunResult> => runAgentWithKind(agent, prompt, opts, sessionId);
+
+export const runReviewerAgent = (
+  agent: Agent,
+  prompt: string,
+  opts: Options,
+  sessionId?: string
+): Promise<RunResult> =>
+  runAgentWithKind(agent, prompt, opts, sessionId, "review");

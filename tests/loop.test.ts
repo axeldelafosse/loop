@@ -7,7 +7,7 @@ const makeOptions = (): Options => ({
   proof: "verify with tests",
   format: "pretty",
   maxIterations: 2,
-  model: "test-model",
+  codexModel: "test-model",
   review: "claudex",
   tmux: false,
   worktree: false,

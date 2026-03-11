@@ -9,7 +9,7 @@ const makeOptions = (): Options => ({
   proof: "verify with tests",
   format: "raw",
   maxIterations: 5,
-  model: "test-model",
+  codexModel: "test-model",
 });
 
 const makeRunReview = (

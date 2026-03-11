@@ -141,6 +141,8 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `-p, --prompt <text|.md file>`: prompt text or a `.md` prompt file path. Plain text auto-creates `PLAN.md` first.
 - `--proof <text>`: optional proof criteria for task completion
 - `--codex-model <model>`: set the model passed to codex (`LOOP_CODEX_MODEL` can also set this by default)
+- `--codex-reviewer-model <model>`: set the model used when Codex is acting as a reviewer. This applies to both `--review` and `--review-plan`, and falls back to `--codex-model` when omitted.
+- `--claude-reviewer-model <model>`: set the model used when Claude is acting as a reviewer. This applies to both `--review` and `--review-plan`.
 - `-m, --max-iterations <number>`: max loop count (default: infinite)
 - `-d, --done <signal>`: done signal string (default: `<promise>DONE</promise>`)
 - `--format <pretty|raw>`: output format (default: `pretty`)
@@ -183,6 +185,9 @@ codex-loop --proof "Use {skill} to verify your changes" "Implement {feature}"
 
 # run review with a single reviewer
 loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review codex
+
+# use specific models only for reviewers
+loop --proof "Use {skill} to verify your changes" "Implement {feature}" --codex-reviewer-model gpt-5.3-codex-spark --review claudex
 
 # run claudex reviewers when done (default behavior)
 loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review claudex

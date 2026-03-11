@@ -4,6 +4,7 @@ import {
   claudeSdkInternals,
   closeClaudeSdk,
   runClaudeTurn,
+  startClaudeSdk,
 } from "../../src/loop/claude-sdk-server";
 import type { Options } from "../../src/loop/types";
 
@@ -31,9 +32,11 @@ const makeOptions = (): Options => ({
   doneSignal: "<done/>",
   format: "raw",
   maxIterations: 1,
-  model: "test-model",
+  codexModel: "test-model",
   proof: "proof",
 });
+
+let lastSpawnCommand: string[] = [];
 
 const asRecord = (value: unknown): JsonRecord => {
   if (typeof value === "object" && value !== null) {
@@ -62,6 +65,9 @@ const installHarness = (onUserMessage: UserMessageHandler): string[] => {
     if (!handlers) {
       throw new Error("expected websocket handlers before spawn");
     }
+    lastSpawnCommand = Array.isArray(_command)
+      ? _command.map((part) => String(part))
+      : [];
 
     const currentHandlers = handlers;
     let stdoutController:
@@ -175,11 +181,22 @@ const installHarness = (onUserMessage: UserMessageHandler): string[] => {
 
 afterEach(async () => {
   await closeClaudeSdk();
+  lastSpawnCommand = [];
   claudeSdkInternals.restoreSpawnFn();
   claudeSdkInternals.restoreServeFn();
   claudeSdkInternals.restoreCountChildProcessesFn();
   claudeSdkInternals.restoreChildPollIntervalMs();
   claudeSdkInternals.restoreWaitTimeoutMs();
+});
+
+test("startClaudeSdk uses the provided model", async () => {
+  installHarness(() => undefined);
+
+  await startClaudeSdk("claude-review");
+
+  const modelArgIndex = lastSpawnCommand.indexOf("--model");
+  expect(modelArgIndex).toBeGreaterThan(-1);
+  expect(lastSpawnCommand[modelArgIndex + 1]).toBe("claude-review");
 });
 
 test("runClaudeTurn resolves immediately when no background task is detected", async () => {

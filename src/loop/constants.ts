@@ -26,6 +26,8 @@ Options:
   -d, --done <signal>                      Done signal (default: <promise>DONE</promise>)
   --proof <text>                           Proof requirements for task completion
   --codex-model <model>                    Override codex model (default: ${DEFAULT_CODEX_MODEL})
+  --codex-reviewer-model <model>           Override codex review model
+  --claude-reviewer-model <model>          Override claude review model
   --format <pretty|raw>                    Log format (default: pretty)
   --review [claude|codex|claudex]          Review on done (default: claudex)
   --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
@@ -56,6 +58,8 @@ export const VALUE_FLAGS: Record<string, ValueFlag> = {
   "--done": "done",
   "--proof": "proof",
   "--codex-model": "codexModel",
+  "--codex-reviewer-model": "codexReviewerModel",
+  "--claude-reviewer-model": "claudeReviewerModel",
   "--format": "format",
   "--session": "session",
 };
