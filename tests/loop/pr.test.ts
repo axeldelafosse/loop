@@ -18,7 +18,8 @@ const loadRunDraftPrStep = async (
   impl: (
     agent: Options["agent"],
     prompt: string,
-    opts: Options
+    opts: Options,
+    sessionId?: string
   ) => Promise<RunResult>
 ) => {
   const runAgentMock = mock(impl);
@@ -37,13 +38,14 @@ test("runDraftPrStep prompts model to create draft PR", async () => {
   );
 
   const opts = makeOptions();
-  await runDraftPrStep("Implement feature X", opts);
+  await runDraftPrStep("Implement feature X", opts, false, "thread-1");
 
   expect(runAgentMock).toHaveBeenCalledTimes(1);
-  const [agent, prompt, passedOpts] = runAgentMock.mock.calls[0] as [
+  const [agent, prompt, passedOpts, sessionId] = runAgentMock.mock.calls[0] as [
     Options["agent"],
     string,
     Options,
+    string,
   ];
 
   expect(agent).toBe("codex");
@@ -51,6 +53,7 @@ test("runDraftPrStep prompts model to create draft PR", async () => {
   expect(prompt).toContain("gh pr create --draft");
   expect(prompt).toContain("Task context:\nImplement feature X");
   expect(passedOpts).toBe(opts);
+  expect(sessionId).toBe("thread-1");
 });
 
 test("runDraftPrStep prompts model to send a follow-up commit when PR exists", async () => {

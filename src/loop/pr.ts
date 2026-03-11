@@ -19,14 +19,16 @@ const buildDraftPrPrompt = (task: string, hasExistingPr: boolean): string =>
 export const runDraftPrStep = async (
   task: string,
   opts: Options,
-  hasExistingPr = false
+  hasExistingPr = false,
+  sessionId?: string
 ): Promise<void> => {
   const action = hasExistingPr ? "send commit" : "create draft PR";
   console.log(`\n[loop] review passed. asking model to ${action}.`);
   const result = await runAgent(
     opts.agent,
     buildDraftPrPrompt(task, hasExistingPr),
-    opts
+    opts,
+    sessionId
   );
   if (result.exitCode !== 0) {
     throw new Error(

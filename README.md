@@ -77,6 +77,8 @@ Some notes:
 - If the input is plain text (not a `.md` path), `loop` first runs a planning step to create `PLAN.md`, then uses `PLAN.md` for the main loop.
 - Running with no args opens the live panel. To run the loop with `PLAN.md`, pass at least `--proof`.
 - If no prompt is provided and options are present, `loop` will use `PLAN.md` if it exists.
+- Codex app-server runs keep one Codex thread for the whole loop run. `--session <id>` resumes that thread with extended history enabled.
+- `CODEX_TRANSPORT=exec` explicitly opts out of durable Codex thread history and uses `codex exec --json` instead.
 
 ## Install globally (symlink)
 
@@ -148,6 +150,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `--format <pretty|raw>`: output format (default: `pretty`)
 - `--review [claude|codex|claudex]`: run a review when done (default: `claudex`; bare `--review` also uses `claudex`). With `claudex`, both reviews run in parallel, then both comments are passed back to the original agent so it can decide what to address. If both reviews found the same issue, that is a stronger signal to fix it.
 - `--review-plan [other|claude|codex|none]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model). Use `none` to skip plan review.
+- `--session <id>`: resume a prior Claude session or Codex thread. Codex resumes keep extended history persistence enabled when app-server transport is in use.
 - `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects (auto-attaches when interactive). Session name format: `repo-loop-X`
 - `--worktree`: create and run inside a fresh git worktree + branch automatically. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help

@@ -1,5 +1,8 @@
 import { getLastClaudeSessionId } from "./claude-sdk-server";
-import { getLastCodexThreadId } from "./codex-app-server";
+import {
+  CodexAppServerFallbackError,
+  getLastCodexThreadId,
+} from "./codex-app-server";
 import { runAgent } from "./runner";
 import type { Agent, Options, ReviewResult, RunResult } from "./types";
 
@@ -15,19 +18,24 @@ const parseIterationCooldownMs = (): number => {
   }
   return parsed;
 };
-const ITERATION_COOLDOWN_MS = parseIterationCooldownMs();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const iterationCooldown = (i: number): Promise<void> =>
-  i > 1 ? sleep(ITERATION_COOLDOWN_MS) : Promise.resolve();
+  i > 1 ? sleep(parseIterationCooldownMs()) : Promise.resolve();
 
-const lastSession = (agent: Agent): string =>
+export const getLastSessionId = (agent: Agent): string =>
   agent === "claude" ? getLastClaudeSessionId() : getLastCodexThreadId();
+
+export const nextSessionId = (
+  agent: Agent,
+  sessionId?: string
+): string | undefined =>
+  agent === "codex" ? sessionId || getLastSessionId(agent) : undefined;
 
 export const doneText = (s: string): string => `done signal "${s}"`;
 
-export const logSessionHint = (agent: Agent): void => {
-  const sid = lastSession(agent);
+export const logSessionHint = (agent: Agent, sessionId?: string): void => {
+  const sid = sessionId || getLastSessionId(agent);
   if (sid) {
     console.error(`[loop] to resume: loop --session ${sid}`);
   }
@@ -36,11 +44,10 @@ export const logSessionHint = (agent: Agent): void => {
 export const logIterationHeader = (
   i: number,
   maxIterations: number,
-  agent: Agent
+  sessionId?: string
 ): void => {
   const tag = Number.isFinite(maxIterations) ? `/${maxIterations}` : "";
-  const sid = lastSession(agent);
-  const sidTag = sid ? ` (session: ${sid})` : "";
+  const sidTag = sessionId ? ` (session: ${sessionId})` : "";
   console.log(`\n[loop] iteration ${i}${tag}${sidTag}`);
 };
 
@@ -55,7 +62,10 @@ export const tryRunAgent = async (
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`\n[loop] ${agent} error: ${msg}`);
-    logSessionHint(agent);
+    logSessionHint(agent, sessionId);
+    if (agent === "codex" && error instanceof CodexAppServerFallbackError) {
+      throw error;
+    }
     return undefined;
   }
 };

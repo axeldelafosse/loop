@@ -172,6 +172,9 @@ const latestWrites = (): string[] => {
   return processes.at(-1)?.writes ?? [];
 };
 
+const latestFrames = (): RequestFrame[] =>
+  latestWrites().map((line) => JSON.parse(line) as RequestFrame);
+
 const latestProcess = (): TestProcess | undefined => processes.at(-1);
 
 const resetState = async (): Promise<void> => {
@@ -263,6 +266,31 @@ test("runCodexTurn promotes turn/start unsupported errors to fallback errors", a
       onParsed: () => undefined,
       onRaw: () => undefined,
     })
+  ).rejects.toBeInstanceOf(appServer.CodexAppServerFallbackError);
+});
+
+test("runCodexTurn promotes thread/resume unsupported errors to fallback errors", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/resume") {
+      write({ id: request.id, error: { message: "method not found" } });
+    }
+  };
+
+  await expect(
+    appServer.runCodexTurn(
+      "say hi",
+      makeOptions(),
+      {
+        onParsed: () => undefined,
+        onRaw: () => undefined,
+      },
+      "thread-1"
+    )
   ).rejects.toBeInstanceOf(appServer.CodexAppServerFallbackError);
 });
 
@@ -693,6 +721,231 @@ test("interruptAppServer kills detached process group when pid is available", as
   } finally {
     process.kill = originalKill;
   }
+});
+
+test("thread/start includes persistExtendedHistory", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      }, 0);
+    }
+  };
+
+  await appServer.runCodexTurn("say hi", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  const threadStart = latestFrames().find(
+    (frame) => frame.method === "thread/start"
+  );
+  expect(threadStart).toBeDefined();
+  const params = threadStart?.params as Record<string, unknown>;
+  expect(params.persistExtendedHistory).toBe(true);
+});
+
+test("runCodexTurn resumes a provided thread with persistExtendedHistory", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/resume") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      }, 0);
+    }
+  };
+
+  await appServer.runCodexTurn(
+    "say hi",
+    makeOptions(),
+    {
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    },
+    "thread-1"
+  );
+
+  const threadResume = latestFrames().find(
+    (frame) => frame.method === "thread/resume"
+  );
+  expect(threadResume).toBeDefined();
+  const params = threadResume?.params as Record<string, unknown>;
+  expect(params.threadId).toBe("thread-1");
+  expect(params.persistExtendedHistory).toBe(true);
+  expect(latestFrames().some((frame) => frame.method === "thread/start")).toBe(
+    false
+  );
+});
+
+test("runCodexTurn skips thread/resume when reusing the current thread in-process", async () => {
+  const appServer = await getModule();
+  let threadStartCount = 0;
+  let turnCount = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      threadStartCount += 1;
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      turnCount += 1;
+      const turnId = `turn-${turnCount}`;
+      write({ id: request.id, result: { turn: { id: turnId } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId,
+            turn: { id: turnId, status: "completed" },
+          },
+        });
+      }, 0);
+    }
+  };
+
+  await appServer.runCodexTurn("first", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+  await appServer.runCodexTurn(
+    "second",
+    makeOptions(),
+    {
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    },
+    "thread-1"
+  );
+
+  expect(threadStartCount).toBe(1);
+  expect(turnCount).toBe(2);
+  expect(latestFrames().some((frame) => frame.method === "thread/resume")).toBe(
+    false
+  );
+});
+
+test("runCodexTurn resumes the thread after an app-server restart", async () => {
+  const appServer = await getModule();
+  let phase = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (phase === 0 && request.method === "thread/start") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (phase === 1 && request.method === "thread/resume") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      const turnId = phase === 0 ? "turn-1" : "turn-2";
+      write({ id: request.id, result: { turn: { id: turnId } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId,
+            turn: { id: turnId, status: "completed" },
+          },
+        });
+      }, 0);
+    }
+  };
+
+  await appServer.runCodexTurn("first", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  phase = 1;
+  latestProcess()?.close();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  await appServer.runCodexTurn(
+    "second",
+    makeOptions(),
+    {
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    },
+    "thread-1"
+  );
+
+  expect(processes).toHaveLength(2);
+  const restartFrames = processes[1]?.writes.map(
+    (line) => JSON.parse(line) as RequestFrame
+  );
+  expect(restartFrames?.some((frame) => frame.method === "thread/resume")).toBe(
+    true
+  );
+  expect(restartFrames?.some((frame) => frame.method === "thread/start")).toBe(
+    false
+  );
+});
+
+test("runCodexTurn fails when thread/resume returns no thread id", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/resume") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  await expect(
+    appServer.runCodexTurn(
+      "say hi",
+      makeOptions(),
+      {
+        onParsed: () => undefined,
+        onRaw: () => undefined,
+      },
+      "thread-1"
+    )
+  ).rejects.toThrow(
+    "codex app-server returned thread/resume without thread id"
+  );
 });
 
 test("runCodexTurn recovers after an unexpected app-server exit and can restart", async () => {

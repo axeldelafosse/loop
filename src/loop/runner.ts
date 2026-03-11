@@ -6,9 +6,6 @@ import {
   startClaudeSdk,
 } from "./claude-sdk-server";
 import {
-  CODEX_TRANSPORT_ENV,
-  CODEX_TRANSPORT_EXEC,
-  CodexAppServerFallbackError,
   hasAppServerProcess,
   interruptAppServer,
   runCodexTurn,
@@ -48,7 +45,6 @@ const activeChildren = new Set<ReturnType<typeof spawn>>();
 let activeAppServerRuns = 0;
 let activeClaudeSdkRuns = 0;
 let watchingSignals = false;
-let fallbackWarned = false;
 const runnerState: RunnerState = {
   runLegacyAgent: (agent, prompt, opts, sessionId, kind) =>
     runLegacyAgent(agent, prompt, opts, sessionId, kind),
@@ -299,17 +295,7 @@ const runCodexAgent = async (
   activeAppServerRuns += 1;
   syncSignalHandlers();
   try {
-    try {
-      await startAppServer();
-    } catch (error) {
-      if (process.env[CODEX_TRANSPORT_ENV] === CODEX_TRANSPORT_EXEC) {
-        throw error;
-      }
-      throw new CodexAppServerFallbackError(
-        error instanceof Error ? error.message : String(error)
-      );
-    }
-
+    await startAppServer();
     const result = await runCodexTurn(
       prompt,
       runOpts,
@@ -325,26 +311,6 @@ const runCodexAgent = async (
       process.stdout.write("\n");
     }
     return { ...result, parsed: finalParsed };
-  } catch (error) {
-    if (
-      process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC &&
-      error instanceof CodexAppServerFallbackError
-    ) {
-      if (!fallbackWarned) {
-        fallbackWarned = true;
-        console.error(
-          "[loop] codex app-server transport failed. Falling back to `codex exec --json`."
-        );
-      }
-      return runnerState.runLegacyAgent(
-        "codex",
-        prompt,
-        runOpts,
-        sessionId,
-        kind
-      );
-    }
-    throw error;
   } finally {
     activeAppServerRuns -= 1;
     syncSignalHandlers();

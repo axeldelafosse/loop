@@ -5,6 +5,7 @@ import {
   iterationCooldown,
   logIterationHeader,
   logSessionHint,
+  nextSessionId,
   tryRunAgent,
 } from "./iteration";
 import { runDraftPrStep } from "./pr";
@@ -13,11 +14,16 @@ import { resolveReviewers, runReview } from "./review";
 import type { Options } from "./types";
 import { hasSignal } from "./utils";
 
+interface IterationResult {
+  done: boolean;
+  sessionId?: string;
+}
+
 const runIterations = async (
   task: string,
   opts: Options,
   reviewers: string[]
-) => {
+): Promise<IterationResult> => {
   let reviewNotes = "";
   let sessionId = opts.sessionId;
   const shouldReview = reviewers.length > 0;
@@ -26,13 +32,13 @@ const runIterations = async (
 
   for (let i = 1; i <= maxIterations; i++) {
     await iterationCooldown(i);
-    logIterationHeader(i, maxIterations, opts.agent);
+    logIterationHeader(i, maxIterations, sessionId);
 
     const prompt = buildWorkPrompt(task, doneSignal, opts.proof, reviewNotes);
     reviewNotes = "";
 
     const result = await tryRunAgent(opts.agent, prompt, opts, sessionId);
-    sessionId = undefined;
+    sessionId = nextSessionId(opts.agent, sessionId);
 
     if (!result) {
       continue;
@@ -42,7 +48,7 @@ const runIterations = async (
       console.error(
         `\n[loop] ${opts.agent} exited with code ${result.exitCode}`
       );
-      logSessionHint(opts.agent);
+      logSessionHint(opts.agent, sessionId);
       continue;
     }
 
@@ -53,16 +59,16 @@ const runIterations = async (
 
     if (!shouldReview) {
       console.log(`\n[loop] ${doneText(doneSignal)} detected, stopping.`);
-      return true;
+      return { done: true, sessionId };
     }
 
     const review = await runReview(reviewers, task, opts);
     if (review.approved) {
-      await runDraftPrStep(task, opts);
+      await runDraftPrStep(task, opts, false, sessionId);
       console.log(
         `\n[loop] ${doneText(doneSignal)} detected and review passed, stopping.`
       );
-      return true;
+      return { done: true, sessionId };
     }
 
     const followUp = formatFollowUp(review);
@@ -70,7 +76,7 @@ const runIterations = async (
     console.log(followUp.log);
   }
 
-  return false;
+  return { done: false, sessionId };
 };
 
 export const runLoop = async (task: string, opts: Options): Promise<void> => {
@@ -82,9 +88,10 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
 
   try {
     while (true) {
-      const done = await runIterations(loopTask, opts, reviewers);
-      if (done || !rl) {
-        if (!done) {
+      const result = await runIterations(loopTask, opts, reviewers);
+      opts.sessionId = result.sessionId;
+      if (result.done || !rl) {
+        if (!result.done) {
           console.log(
             `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
           );

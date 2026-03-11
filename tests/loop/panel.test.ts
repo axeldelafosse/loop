@@ -226,6 +226,35 @@ test("buildLines uses stacked layout on narrow terminals", () => {
   expect(lines.some((line) => line.startsWith("final: "))).toBe(true);
 });
 
+test("parseCodexHistoryRow handles extended-history session with tool-call events", () => {
+  const dir = mkdtempSync(join(tmpdir(), "loop-codex-history-ext-"));
+  const path = join(dir, "rollout.jsonl");
+  const lines = [
+    JSON.stringify({
+      payload: { id: "thread-ext-1", cwd: "/repo/project" },
+      type: "event_msg/turn_start",
+    }),
+    JSON.stringify({
+      type: "event_msg/exec_command_end",
+      payload: { command: "ls -la", exitCode: 0 },
+    }),
+    JSON.stringify({
+      type: "event_msg/mcp_tool_call_end",
+      payload: { tool: "read_file", result: "ok" },
+    }),
+    JSON.stringify({
+      type: "event_msg/task_complete",
+      payload: { status: "done" },
+    }),
+  ];
+  writeFileSync(path, `${lines.join("\n")}\n`);
+  const row = panelInternals.parseCodexHistoryRow(path);
+  rmSync(dir, { recursive: true, force: true });
+  expect(row?.row.session).toBe("thread-ext-1");
+  expect(row?.row.cwd).toBe("/repo/project");
+  expect(row?.row.event).toBe("event_msg/task_complete");
+});
+
 test("parseCodexHistoryRow falls back to top-level session keys when payload is missing", () => {
   const dir = mkdtempSync(join(tmpdir(), "loop-codex-history-"));
   const path = join(dir, "session-123.jsonl");

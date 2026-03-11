@@ -53,6 +53,7 @@ export const DEFAULT_CODEX_TRANSPORT: TransportMode =
 
 const METHOD_INITIALIZE = "initialize";
 const METHOD_THREAD_START = "thread/start";
+const METHOD_THREAD_RESUME = "thread/resume";
 const METHOD_TURN_START = "turn/start";
 const METHOD_TURN_COMPLETED = "turn/completed";
 const METHOD_ERROR = "error";
@@ -68,6 +69,7 @@ const METHOD_AUTH_REFRESH = "account/chatgptAuthTokens/refresh";
 const METHODS_TRIGGERING_FALLBACK = new Set([
   METHOD_INITIALIZE,
   METHOD_THREAD_START,
+  METHOD_THREAD_RESUME,
   METHOD_TURN_START,
 ]);
 
@@ -187,6 +189,10 @@ const extractThreadFromTurnStart = (value: unknown): { id?: string } => {
   const record = asRecord(value);
   const thread = asRecord(record.thread);
   return { id: asString(thread.id) };
+};
+
+const extractThreadFromResponse = (value: unknown): string | undefined => {
+  return extractThreadFromTurnStart(value).id ?? extractThreadId(value);
 };
 
 const extractTurnFromStart = (value: unknown): { id?: string } => {
@@ -370,6 +376,7 @@ class AppServerClient {
   async close(): Promise<void> {
     this.closed = true;
     this.failAll(new Error("codex app-server closed"));
+    this.lastThreadId = "";
     const ws = this.ws;
     this.ws = undefined;
     if (ws) {
@@ -396,8 +403,21 @@ class AppServerClient {
     resumeThreadId?: string
   ): Promise<string> {
     if (resumeThreadId) {
-      this.lastThreadId = resumeThreadId;
-      return resumeThreadId;
+      if (this.lastThreadId === resumeThreadId) {
+        return resumeThreadId;
+      }
+      const response = await this.sendRequest(METHOD_THREAD_RESUME, {
+        threadId: resumeThreadId,
+        persistExtendedHistory: true,
+      });
+      const threadId = extractThreadFromResponse(response);
+      if (!threadId) {
+        throw new CodexAppServerFallbackError(
+          "codex app-server returned thread/resume without thread id"
+        );
+      }
+      this.lastThreadId = threadId;
+      return threadId;
     }
     const response = await this.sendRequest(METHOD_THREAD_START, {
       model,
@@ -867,6 +887,7 @@ class AppServerClient {
 
   private handleUnexpectedExit(): void {
     this.child = undefined;
+    this.lastThreadId = "";
     const ws = this.ws;
     this.ws = undefined;
     if (ws) {

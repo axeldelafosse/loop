@@ -345,29 +345,25 @@ test("runAgent preserves nested delta newline content in pretty mode", async () 
   }
 });
 
-test("runAgent only falls back to legacy once per process for app-server compatibility errors", async () => {
+test("runAgent throws on app-server compatibility errors", async () => {
   runCodexTurn.mockImplementation(() => {
     throw new appServerFallback("app-server unsupported");
   });
 
-  const originalError = console.error;
-  const errorSpy = mock(() => undefined);
-  console.error = errorSpy;
+  await expect(runAgent("codex", "say hi", makeOptions())).rejects.toThrow(
+    "app-server unsupported"
+  );
+  expect(runLegacyAgent).not.toHaveBeenCalled();
+});
 
-  try {
-    const first = await runAgent("codex", "say hi", makeOptions());
-    const second = await runAgent("codex", "say hi again", makeOptions());
+test("runAgent throws when app-server startup fails", async () => {
+  startAppServer.mockRejectedValue(new appServerFallback("failed to start"));
 
-    expect(first.exitCode).toBe(0);
-    expect(second.exitCode).toBe(0);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[loop] codex app-server transport failed. Falling back to `codex exec --json`."
-    );
-    expect(runLegacyAgent).toHaveBeenCalledTimes(2);
-  } finally {
-    console.error = originalError;
-  }
+  await expect(runAgent("codex", "say hi", makeOptions())).rejects.toThrow(
+    "failed to start"
+  );
+  expect(runLegacyAgent).not.toHaveBeenCalled();
+  expect(runCodexTurn).not.toHaveBeenCalled();
 });
 
 test("runAgent does not fallback on non-compatibility app-server failures", async () => {

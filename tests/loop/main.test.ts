@@ -30,6 +30,7 @@ const noopReview = async (): Promise<ReviewResult> => ({
   failureCount: 0,
   notes: "",
 });
+class TestCodexAppServerFallbackError extends Error {}
 
 afterEach(() => {
   mock.restore();
@@ -37,9 +38,17 @@ afterEach(() => {
 
 const loadRunLoop = async (mocks: {
   buildWorkPrompt?: (...args: unknown[]) => string;
+  CodexAppServerFallbackError?: typeof Error;
+  getLastClaudeSessionId?: () => string;
+  getLastCodexThreadId?: () => string;
   resolveReviewers?: () => string[];
-  runAgent?: () => Promise<RunResult>;
-  runDraftPrStep?: () => Promise<undefined>;
+  runAgent?: (
+    agent: string,
+    prompt: string,
+    opts: Options,
+    sessionId?: string
+  ) => Promise<RunResult>;
+  runDraftPrStep?: (...args: unknown[]) => Promise<undefined>;
   runReview?: () => Promise<ReviewResult>;
   question?: () => Promise<string>;
 }) => {
@@ -61,6 +70,14 @@ const loadRunLoop = async (mocks: {
   }));
   mock.module("../../src/loop/runner", () => ({
     runAgent: mock(mocks.runAgent ?? (async () => makeRunResult("working"))),
+  }));
+  mock.module("../../src/loop/codex-app-server", () => ({
+    CodexAppServerFallbackError:
+      mocks.CodexAppServerFallbackError ?? TestCodexAppServerFallbackError,
+    getLastCodexThreadId: mock(mocks.getLastCodexThreadId ?? (() => "")),
+  }));
+  mock.module("../../src/loop/claude-sdk-server", () => ({
+    getLastClaudeSessionId: mock(mocks.getLastClaudeSessionId ?? (() => "")),
   }));
   mock.module("../../src/loop/pr", () => ({
     runDraftPrStep: mock(mocks.runDraftPrStep ?? (async () => undefined)),
@@ -108,9 +125,14 @@ test("runLoop continues on non-zero exit code instead of throwing", async () => 
 
 test("runLoop creates draft PR when done signal is reviewed and approved", async () => {
   const opts = makeOptions({ review: "claudex" });
+  let codexThreadId = "";
   const { runLoop, runAgent, runReview, runDraftPrStep } = await loadRunLoop({
+    getLastCodexThreadId: () => codexThreadId,
     resolveReviewers: () => ["codex", "claude"],
-    runAgent: async () => makeRunResult("<done/>"),
+    runAgent: () => {
+      codexThreadId = "thread-1";
+      return Promise.resolve(makeRunResult("<done/>"));
+    },
     runReview: async () => ({
       approved: true,
       consensusFail: false,
@@ -123,7 +145,13 @@ test("runLoop creates draft PR when done signal is reviewed and approved", async
 
   expect(runAgent).toHaveBeenCalledTimes(1);
   expect(runReview).toHaveBeenCalledTimes(1);
-  expect(runDraftPrStep).toHaveBeenNthCalledWith(1, "Ship feature", opts);
+  expect(runDraftPrStep).toHaveBeenNthCalledWith(
+    1,
+    "Ship feature",
+    opts,
+    false,
+    "thread-1"
+  );
 });
 
 test("runLoop skips review when agent exits non-zero even with done signal", async () => {
@@ -281,4 +309,215 @@ test("runLoop stops after max iterations when done signal is never found", async
 
   expect(runAgent).toHaveBeenCalledTimes(3);
   expect(runReview).not.toHaveBeenCalled();
+});
+
+test("runLoop reuses the latest Codex thread across iterations", async () => {
+  const sessionIds: Array<string | undefined> = [];
+  let codexThreadId = "";
+  const { runLoop } = await loadRunLoop({
+    getLastCodexThreadId: () => codexThreadId,
+    resolveReviewers: () => [],
+    runAgent: (_agent, _prompt, _opts, sessionId) => {
+      sessionIds.push(sessionId);
+      codexThreadId = "thread-1";
+      return Promise.resolve(makeRunResult("working"));
+    },
+  });
+
+  await runLoop(
+    "Ship feature",
+    makeOptions({ maxIterations: 3, review: undefined })
+  );
+
+  expect(sessionIds).toEqual([undefined, "thread-1", "thread-1"]);
+});
+
+test("runLoop carries the Codex thread into follow-up cycles", async () => {
+  const sessionIds: Array<string | undefined> = [];
+  let codexThreadId = "";
+  let promptCount = 0;
+  const { runLoop } = await loadRunLoop({
+    getLastCodexThreadId: () => codexThreadId,
+    resolveReviewers: () => [],
+    runAgent: (_agent, _prompt, _opts, sessionId) => {
+      sessionIds.push(sessionId);
+      codexThreadId = "thread-follow-up";
+      promptCount++;
+      return Promise.resolve(
+        makeRunResult(promptCount === 1 ? "working" : "<done/>")
+      );
+    },
+    question: async () => (promptCount === 1 ? "Keep going" : ""),
+  });
+
+  const originalIsTty = process.stdin.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  try {
+    await runLoop(
+      "Ship feature",
+      makeOptions({ maxIterations: 1, review: undefined })
+    );
+  } finally {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: originalIsTty,
+    });
+  }
+
+  expect(sessionIds).toEqual([undefined, "thread-follow-up"]);
+});
+
+test("runLoop logs the work thread instead of the last reviewer thread", async () => {
+  const logs: string[] = [];
+  let codexThreadId = "";
+  let runCount = 0;
+  const { runLoop } = await loadRunLoop({
+    getLastCodexThreadId: () => codexThreadId,
+    resolveReviewers: () => ["codex"],
+    runAgent: () => {
+      runCount++;
+      codexThreadId = "work-thread";
+      return Promise.resolve(
+        runCount === 1 ? makeRunResult("<done/>") : makeRunResult("working")
+      );
+    },
+    runReview: () => {
+      codexThreadId = "review-thread";
+      return {
+        approved: false,
+        consensusFail: false,
+        failureCount: 1,
+        notes: "keep going",
+      };
+    },
+  });
+
+  const originalLog = console.log;
+  const logSpy = mock((message?: unknown): void => {
+    logs.push(String(message ?? ""));
+  });
+  (console as { log: typeof logSpy }).log = logSpy;
+
+  try {
+    await runLoop("Ship feature", makeOptions({ maxIterations: 2 }));
+  } finally {
+    console.log = originalLog;
+  }
+
+  expect(
+    logs.some((line) => line.includes("iteration 2/2 (session: work-thread)"))
+  ).toBe(true);
+  expect(
+    logs.some((line) => line.includes("iteration 2/2 (session: review-thread)"))
+  ).toBe(false);
+});
+
+test("runLoop keeps an explicit resumed Codex thread after retryable errors", async () => {
+  const sessionIds: Array<string | undefined> = [];
+  let attempts = 0;
+  const { runLoop, runAgent } = await loadRunLoop({
+    getLastCodexThreadId: () => "",
+    resolveReviewers: () => [],
+    runAgent: (_agent, _prompt, _opts, sessionId) => {
+      sessionIds.push(sessionId);
+      attempts++;
+      if (attempts === 1) {
+        throw new Error("temporary codex failure");
+      }
+      return Promise.resolve(makeRunResult("working"));
+    },
+  });
+
+  await runLoop(
+    "Ship feature",
+    makeOptions({
+      maxIterations: 2,
+      review: undefined,
+      sessionId: "resume-thread",
+    })
+  );
+
+  expect(runAgent).toHaveBeenCalledTimes(2);
+  expect(sessionIds).toEqual(["resume-thread", "resume-thread"]);
+});
+
+test("runLoop keeps the Codex work thread after a reviewer thread and retryable error", async () => {
+  const sessionIds: Array<string | undefined> = [];
+  let codexThreadId = "";
+  let runCount = 0;
+  const { runLoop } = await loadRunLoop({
+    getLastCodexThreadId: () => codexThreadId,
+    resolveReviewers: () => ["codex"],
+    runAgent: (_agent, _prompt, _opts, sessionId) => {
+      sessionIds.push(sessionId);
+      runCount++;
+      if (runCount === 1) {
+        codexThreadId = "work-thread";
+        return Promise.resolve(makeRunResult("<done/>"));
+      }
+      if (runCount === 2) {
+        throw new Error("temporary codex failure");
+      }
+      codexThreadId = "work-thread";
+      return Promise.resolve(makeRunResult("working"));
+    },
+    runReview: () => {
+      codexThreadId = "review-thread";
+      return {
+        approved: false,
+        consensusFail: false,
+        failureCount: 1,
+        notes: "keep going",
+      };
+    },
+  });
+
+  await runLoop("Ship feature", makeOptions({ maxIterations: 3 }));
+
+  expect(sessionIds).toEqual([undefined, "work-thread", "work-thread"]);
+});
+
+test("runLoop aborts on Codex app-server fallback errors", async () => {
+  class AppServerFallbackError extends Error {}
+  const { runLoop, runAgent } = await loadRunLoop({
+    CodexAppServerFallbackError: AppServerFallbackError,
+    resolveReviewers: () => [],
+    runAgent: () => {
+      throw new AppServerFallbackError("app-server unsupported");
+    },
+  });
+
+  await expect(
+    runLoop("Ship feature", makeOptions({ review: undefined }))
+  ).rejects.toThrow("app-server unsupported");
+  expect(runAgent).toHaveBeenCalledTimes(1);
+});
+
+test("runLoop clears Claude session ids after the first iteration", async () => {
+  const sessionIds: Array<string | undefined> = [];
+  let claudeSessionId = "";
+  const { runLoop } = await loadRunLoop({
+    getLastClaudeSessionId: () => claudeSessionId,
+    resolveReviewers: () => [],
+    runAgent: (_agent, _prompt, _opts, sessionId) => {
+      sessionIds.push(sessionId);
+      claudeSessionId = "claude-session-1";
+      return Promise.resolve(makeRunResult("working"));
+    },
+  });
+
+  await runLoop(
+    "Ship feature",
+    makeOptions({
+      agent: "claude",
+      maxIterations: 3,
+      review: undefined,
+      sessionId: "resume-claude",
+    })
+  );
+
+  expect(sessionIds).toEqual(["resume-claude", undefined, undefined]);
 });
