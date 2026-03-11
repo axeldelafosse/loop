@@ -3,6 +3,7 @@ import { parseArgs } from "../../src/loop/args";
 import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_DONE_SIGNAL,
+  DEFAULT_MAX_ITERATIONS,
   LOOP_VERSION,
 } from "../../src/loop/constants";
 
@@ -72,7 +73,7 @@ test("parseArgs returns expected defaults when proof is omitted", () => {
   expect(opts.doneSignal).toBe(DEFAULT_DONE_SIGNAL);
   expect(opts.proof).toBe("");
   expect(opts.format).toBe("pretty");
-  expect(opts.maxIterations).toBe(Number.POSITIVE_INFINITY);
+  expect(opts.maxIterations).toBe(DEFAULT_MAX_ITERATIONS);
   expect(opts.codexModel).toBe(DEFAULT_CODEX_MODEL);
   expect(opts.promptInput).toBeUndefined();
   expect(opts.review).toBe("claudex");

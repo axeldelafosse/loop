@@ -143,7 +143,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `--codex-model <model>`: set the model passed to codex (`LOOP_CODEX_MODEL` can also set this by default)
 - `--codex-reviewer-model <model>`: set the model used when Codex is acting as a reviewer. This applies to both `--review` and `--review-plan`, and falls back to `--codex-model` when omitted.
 - `--claude-reviewer-model <model>`: set the model used when Claude is acting as a reviewer. This applies to both `--review` and `--review-plan`.
-- `-m, --max-iterations <number>`: max loop count (default: infinite)
+- `-m, --max-iterations <number>`: max loop count (default: `20`)
 - `-d, --done <signal>`: done signal string (default: `<promise>DONE</promise>`)
 - `--format <pretty|raw>`: output format (default: `pretty`)
 - `--review [claude|codex|claudex]`: run a review when done (default: `claudex`; bare `--review` also uses `claudex`). With `claudex`, both reviews run in parallel, then both comments are passed back to the original agent so it can decide what to address. If both reviews found the same issue, that is a stronger signal to fix it.

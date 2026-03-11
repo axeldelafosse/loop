@@ -4,6 +4,7 @@ import type { ValueFlag } from "./types";
 export const DEFAULT_DONE_SIGNAL = "<promise>DONE</promise>";
 export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_CLAUDE_MODEL = "opus";
+export const DEFAULT_MAX_ITERATIONS = 20;
 export const LOOP_VERSION = pkg.version;
 
 export const HELP = `
@@ -22,7 +23,7 @@ Options:
   --claude-only                            Use Claude for work, review, and plan review
   --codex-only                             Use Codex for work, review, and plan review
   -p, --prompt <text|.md file>             Prompt text or path to a .md prompt file
-  -m, --max-iterations <number>            Max loops (default: infinite)
+  -m, --max-iterations <number>            Max loops (default: ${DEFAULT_MAX_ITERATIONS})
   -d, --done <signal>                      Done signal (default: <promise>DONE</promise>)
   --proof <text>                           Proof requirements for task completion
   --codex-model <model>                    Override codex model (default: ${DEFAULT_CODEX_MODEL})

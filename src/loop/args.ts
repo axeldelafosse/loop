@@ -2,6 +2,7 @@ import { env } from "bun";
 import {
   DEFAULT_CODEX_MODEL,
   DEFAULT_DONE_SIGNAL,
+  DEFAULT_MAX_ITERATIONS,
   HELP,
   LOOP_VERSION,
   VALUE_FLAGS,
@@ -324,7 +325,7 @@ export const parseArgs = (argv: string[]): Options => {
     doneSignal: DEFAULT_DONE_SIGNAL,
     proof: "",
     format: "pretty",
-    maxIterations: Number.POSITIVE_INFINITY,
+    maxIterations: DEFAULT_MAX_ITERATIONS,
     codexModel: env.LOOP_CODEX_MODEL ?? DEFAULT_CODEX_MODEL,
     review: "claudex",
     tmux: false,
