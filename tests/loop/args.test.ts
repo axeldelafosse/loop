@@ -274,6 +274,18 @@ test("parseArgs rejects empty reviewer model values", () => {
   ).toThrow("Invalid --claude-reviewer-model value: cannot be empty");
 });
 
+test("parseArgs rejects missing model values when another flag follows", () => {
+  expect(() => parseArgs(["--codex-model", "--proof", "verify"])).toThrow(
+    "Missing value for --codex-model"
+  );
+  expect(() =>
+    parseArgs(["--codex-reviewer-model", "--proof", "verify"])
+  ).toThrow("Missing value for --codex-reviewer-model");
+  expect(() =>
+    parseArgs(["--claude-reviewer-model", "--proof", "verify"])
+  ).toThrow("Missing value for --claude-reviewer-model");
+});
+
 test("parseArgs lets --agent override only agent after only-mode", () => {
   const opts = parseArgs(["--codex-only", "--agent", "claude", "--proof", "x"]);
 

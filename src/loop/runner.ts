@@ -276,6 +276,8 @@ const runCodexAgent = async (
   sessionId?: string,
   kind: AgentRunKind = "work"
 ): Promise<RunResult> => {
+  // Legacy codex exec resolves from opts again, so bake the final model into
+  // codexModel before either transport path runs.
   const runOpts = withCodexModel(opts, resolveModel("codex", opts, kind));
   if (!runnerState.useAppServer()) {
     return runnerState.runLegacyAgent(

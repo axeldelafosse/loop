@@ -60,6 +60,13 @@ const requireTrimmedValue = (value: string, message: string): string => {
   return trimmed;
 };
 
+const requireFlagValue = (arg: string, value: string | undefined): string => {
+  if (!value || value === "--" || value.startsWith("-")) {
+    throw new Error(`Missing value for ${arg}`);
+  }
+  return value;
+};
+
 const applyValueFlag = (
   flag: ValueFlag,
   value: string,
@@ -188,6 +195,46 @@ const parsePlanReviewArg = (
   }
 };
 
+const parseModelArg = (
+  argv: string[],
+  index: number,
+  opts: Options,
+  arg: string
+): number | undefined => {
+  if (arg.startsWith("--codex-model=")) {
+    applyValueFlag("codexModel", arg.slice("--codex-model=".length), opts);
+    return index + 1;
+  }
+  if (arg.startsWith("--codex-reviewer-model=")) {
+    applyValueFlag(
+      "codexReviewerModel",
+      arg.slice("--codex-reviewer-model=".length),
+      opts
+    );
+    return index + 1;
+  }
+  if (arg.startsWith("--claude-reviewer-model=")) {
+    applyValueFlag(
+      "claudeReviewerModel",
+      arg.slice("--claude-reviewer-model=".length),
+      opts
+    );
+    return index + 1;
+  }
+  if (
+    arg === "--codex-model" ||
+    arg === "--codex-reviewer-model" ||
+    arg === "--claude-reviewer-model"
+  ) {
+    applyValueFlag(
+      VALUE_FLAGS[arg],
+      requireFlagValue(arg, argv[index + 1]),
+      opts
+    );
+    return index + 2;
+  }
+};
+
 const consumeArg = (
   argv: string[],
   index: number,
@@ -212,25 +259,9 @@ const consumeArg = (
     return { nextIndex: argv.length, stop: true, onlyAgent };
   }
 
-  if (arg.startsWith("--codex-model=")) {
-    applyValueFlag("codexModel", arg.slice("--codex-model=".length), opts);
-    return { nextIndex: index + 1, stop: false, onlyAgent };
-  }
-  if (arg.startsWith("--codex-reviewer-model=")) {
-    applyValueFlag(
-      "codexReviewerModel",
-      arg.slice("--codex-reviewer-model=".length),
-      opts
-    );
-    return { nextIndex: index + 1, stop: false, onlyAgent };
-  }
-  if (arg.startsWith("--claude-reviewer-model=")) {
-    applyValueFlag(
-      "claudeReviewerModel",
-      arg.slice("--claude-reviewer-model=".length),
-      opts
-    );
-    return { nextIndex: index + 1, stop: false, onlyAgent };
+  const modelNextIndex = parseModelArg(argv, index, opts, arg);
+  if (modelNextIndex !== undefined) {
+    return { nextIndex: modelNextIndex, stop: false, onlyAgent };
   }
 
   const modeAgent = parseOnlyModeFlag(arg);
