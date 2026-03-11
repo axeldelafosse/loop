@@ -506,10 +506,7 @@ const runAgentWithKind = (
   if (agent === "codex") {
     return runCodexAgent(prompt, opts, sessionId, kind);
   }
-  if (agent === "claude") {
-    return runClaudeAgent(prompt, opts, sessionId, kind);
-  }
-  return runLegacyAgent(agent, prompt, opts, sessionId, kind);
+  return runClaudeAgent(prompt, opts, sessionId, kind);
 };
 
 export const runAgent = (
