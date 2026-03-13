@@ -720,7 +720,7 @@ test("runCodexTurn recovers after an unexpected app-server exit and can restart"
       onParsed: () => undefined,
       onRaw: () => undefined,
     })
-  ).rejects.toBeInstanceOf(appServer.CodexAppServerFallbackError);
+  ).rejects.toBeInstanceOf(appServer.CodexAppServerUnexpectedExitError);
 
   currentHandler = (request, write) => {
     if (request.method === "initialize") {

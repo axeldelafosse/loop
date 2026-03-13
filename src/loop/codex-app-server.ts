@@ -207,6 +207,7 @@ const toError = (value: Error | unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
 
 export class CodexAppServerFallbackError extends Error {}
+export class CodexAppServerUnexpectedExitError extends CodexAppServerFallbackError {}
 
 export const codexAppServerInternals = {
   parseLine,
@@ -879,7 +880,9 @@ class AppServerClient {
     this.started = false;
     this.ready = false;
     this.failAll(
-      new CodexAppServerFallbackError("codex app-server exited unexpectedly")
+      new CodexAppServerUnexpectedExitError(
+        "codex app-server exited unexpectedly"
+      )
     );
   }
 }

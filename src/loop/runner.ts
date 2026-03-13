@@ -9,6 +9,7 @@ import {
   CODEX_TRANSPORT_ENV,
   CODEX_TRANSPORT_EXEC,
   CodexAppServerFallbackError,
+  CodexAppServerUnexpectedExitError,
   hasAppServerProcess,
   interruptAppServer,
   runCodexTurn,
@@ -43,10 +44,9 @@ const SIGNAL_EXIT_CODES: Record<ExitSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
-const APP_SERVER_UNEXPECTED_EXIT = "codex app-server exited unexpectedly";
 const APP_SERVER_RETRY_LIMIT = 1;
 const APP_SERVER_RETRY_LOG =
-  "[loop] codex app-server exited unexpectedly. Restarting app-server and retrying once.";
+  "[loop] codex app-server exited unexpectedly. Restarting app-server and retrying.";
 
 const activeChildren = new Set<ReturnType<typeof spawn>>();
 let activeAppServerRuns = 0;
@@ -275,8 +275,7 @@ const appendParsedLine = (
 };
 
 const isRetryableAppServerError = (error: unknown): boolean =>
-  error instanceof CodexAppServerFallbackError &&
-  error.message.includes(APP_SERVER_UNEXPECTED_EXIT);
+  error instanceof CodexAppServerUnexpectedExitError;
 
 const runCodexAppServerAttempt = async (
   prompt: string,
