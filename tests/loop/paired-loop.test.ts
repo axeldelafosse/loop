@@ -303,6 +303,68 @@ test("runPairedLoop resolves a stored raw session id back to its run manifest", 
   }
 });
 
+test("runPairedLoop restarts a completed paired run with fresh agent sessions", async () => {
+  const module = await loadPairedLoop();
+  const home = makeTempHome();
+  const originalHome = process.env.HOME;
+  const originalRunId = process.env.LOOP_RUN_ID;
+  const starts: Array<{ agent: Agent; sessionId?: string }> = [];
+  process.env.HOME = home;
+  Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+  startPersistentAgentSessionImpl = (agent, _opts, sessionId) => {
+    starts.push({ agent, sessionId });
+    return Promise.resolve(undefined);
+  };
+
+  try {
+    const storage = resolveRunStorage("alpha", process.cwd(), home);
+    writeRunManifest(
+      storage.manifestPath,
+      createRunManifest(
+        {
+          claudeSessionId: "claude-session-1",
+          codexThreadId: "codex-thread-1",
+          cwd: process.cwd(),
+          mode: "paired",
+          pid: 1234,
+          repoId: storage.repoId,
+          runId: "alpha",
+          status: "done",
+        },
+        "2026-03-22T10:00:00.000Z"
+      )
+    );
+
+    await module.runPairedLoop(
+      "Ship feature",
+      makeOptions({ resumeRunId: "alpha" })
+    );
+
+    expect(starts).toEqual([
+      { agent: "claude", sessionId: undefined },
+      { agent: "codex", sessionId: undefined },
+    ]);
+    expect(readRunManifest(storage.manifestPath)).toMatchObject({
+      claudeSessionId: "",
+      codexThreadId: "",
+      runId: "alpha",
+      status: "done",
+    });
+  } finally {
+    if (originalHome === undefined) {
+      Reflect.deleteProperty(process.env, "HOME");
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalRunId === undefined) {
+      Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+    } else {
+      process.env.LOOP_RUN_ID = originalRunId;
+    }
+    rmSync(home, { force: true, recursive: true });
+  }
+});
+
 test("preparePairedOptions loads stored pair ids before planning", async () => {
   const module = await loadPairedLoop();
   const home = makeTempHome();

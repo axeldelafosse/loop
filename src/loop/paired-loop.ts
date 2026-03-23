@@ -10,6 +10,7 @@ import {
 } from "./iteration";
 import {
   applyPairedOptions,
+  canResumePairedManifest,
   preparePairedOptions as preparePairedOptionsImpl,
   resolvePreparedRunState,
 } from "./paired-options";
@@ -235,16 +236,21 @@ const drainBridge = async (
 };
 
 const prepareRunState = (opts: Options, cwd: string): PairedState => {
-  const { manifest: existing, storage } = resolvePreparedRunState(opts, cwd);
-  applyPairedOptions(opts, storage, existing);
+  const {
+    allowRawSessionFallback,
+    manifest: existing,
+    storage,
+  } = resolvePreparedRunState(opts, cwd);
+  applyPairedOptions(opts, storage, existing, allowRawSessionFallback);
+  const resumable = canResumePairedManifest(existing) ? existing : undefined;
   const manifest = existing
     ? touchRunManifest(
         {
           ...existing,
           claudeSessionId:
-            existing.claudeSessionId || opts.pairedSessionIds?.claude || "",
+            resumable?.claudeSessionId || opts.pairedSessionIds?.claude || "",
           codexThreadId:
-            existing.codexThreadId || opts.pairedSessionIds?.codex || "",
+            resumable?.codexThreadId || opts.pairedSessionIds?.codex || "",
           cwd,
           mode: "paired",
           pid: process.pid,

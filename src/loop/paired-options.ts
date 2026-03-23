@@ -15,41 +15,62 @@ import {
 import type { Options, PairedSessionIds } from "./types";
 
 export interface PreparedRunState {
+  allowRawSessionFallback: boolean;
   manifest?: RunManifest;
   storage: RunStorage;
 }
 
-const resolveRequestedRunId = (
+interface RequestedRunState {
+  allowRawSessionFallback: boolean;
+  runId?: string;
+}
+
+export const canResumePairedManifest = (manifest?: RunManifest): boolean => {
+  const status = manifest?.status;
+  return status === "running" || status === "active";
+};
+
+const resolveRequestedRunState = (
   opts: Options,
   cwd: string
-): string | undefined => {
+): RequestedRunState => {
   if (opts.resumeRunId) {
     const runId = resolveExistingRunId(opts.resumeRunId, cwd);
     if (!runId) {
       throw new Error(`[loop] paired run "${opts.resumeRunId}" does not exist`);
     }
-    return runId;
+    return { allowRawSessionFallback: false, runId };
   }
 
   if (!opts.sessionId?.trim()) {
-    return undefined;
+    return { allowRawSessionFallback: false };
   }
 
-  return resolveExistingRunId(opts.sessionId, cwd);
+  const runId = resolveExistingRunId(opts.sessionId, cwd);
+  if (runId) {
+    return { allowRawSessionFallback: false, runId };
+  }
+  return { allowRawSessionFallback: true };
 };
 
 const pairedSessionIds = (
   opts: Options,
-  manifest?: RunManifest
+  manifest: RunManifest | undefined,
+  allowRawSessionFallback: boolean
 ): PairedSessionIds | undefined => {
+  const stored = canResumePairedManifest(manifest) ? manifest : undefined;
   const sessionId = opts.sessionId?.trim();
   let fallback: PairedSessionIds | undefined;
-  if (sessionId && !(manifest?.claudeSessionId || manifest?.codexThreadId)) {
+  if (
+    allowRawSessionFallback &&
+    sessionId &&
+    !(stored?.claudeSessionId || stored?.codexThreadId)
+  ) {
     fallback =
       opts.agent === "claude" ? { claude: sessionId } : { codex: sessionId };
   }
-  const claude = manifest?.claudeSessionId || fallback?.claude || undefined;
-  const codex = manifest?.codexThreadId || fallback?.codex || undefined;
+  const claude = stored?.claudeSessionId || fallback?.claude || undefined;
+  const codex = stored?.codexThreadId || fallback?.codex || undefined;
   if (!(claude || codex)) {
     return undefined;
   }
@@ -61,20 +82,28 @@ export const resolvePreparedRunState = (
   cwd = process.cwd(),
   createManifest = true
 ): PreparedRunState => {
-  const requested = resolveRequestedRunId(opts, cwd);
+  const requested = resolveRequestedRunState(opts, cwd);
   const repoId = resolveRepoId(cwd);
   const storageRoot = resolveStorageRoot();
-  const runId = requested ?? resolveRunId(storageRoot, repoId, process.env);
+  const runId =
+    requested.runId ?? resolveRunId(storageRoot, repoId, process.env);
   process.env.LOOP_RUN_ID = runId;
   const storage = resolveRunStorage(runId, cwd);
   ensureRunStorage(storage);
   const existingManifest = readRunManifest(storage.manifestPath);
   if (existingManifest) {
-    return { manifest: existingManifest, storage };
+    return {
+      allowRawSessionFallback: requested.allowRawSessionFallback,
+      manifest: existingManifest,
+      storage,
+    };
   }
 
   if (!createManifest) {
-    return { storage };
+    return {
+      allowRawSessionFallback: requested.allowRawSessionFallback,
+      storage,
+    };
   }
 
   const manifest = createRunManifest({
@@ -88,19 +117,28 @@ export const resolvePreparedRunState = (
     status: "running",
   });
   writeRunManifest(storage.manifestPath, manifest);
-  return { manifest, storage };
+  return {
+    allowRawSessionFallback: requested.allowRawSessionFallback,
+    manifest,
+    storage,
+  };
 };
 
 export const applyPairedOptions = (
   opts: Options,
   storage: RunStorage,
-  manifest?: RunManifest
+  manifest: RunManifest | undefined,
+  allowRawSessionFallback = false
 ): void => {
   opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(storage.runDir, "claude");
   opts.claudePersistentSession = true;
   opts.codexMcpConfigArgs = buildCodexBridgeConfigArgs(storage.runDir, "codex");
   opts.pairedMode = true;
-  opts.pairedSessionIds = pairedSessionIds(opts, manifest);
+  opts.pairedSessionIds = pairedSessionIds(
+    opts,
+    manifest,
+    allowRawSessionFallback
+  );
 };
 
 export const preparePairedOptions = (
@@ -108,10 +146,7 @@ export const preparePairedOptions = (
   cwd = process.cwd(),
   createManifest = true
 ): void => {
-  const { manifest, storage } = resolvePreparedRunState(
-    opts,
-    cwd,
-    createManifest
-  );
-  applyPairedOptions(opts, storage, manifest);
+  const { allowRawSessionFallback, manifest, storage } =
+    resolvePreparedRunState(opts, cwd, createManifest);
+  applyPairedOptions(opts, storage, manifest, allowRawSessionFallback);
 };
