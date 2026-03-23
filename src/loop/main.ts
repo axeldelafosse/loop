@@ -1,4 +1,3 @@
-import { runSingleLoop } from "./single-loop";
 import type { Options } from "./types";
 
 export const runLoop = async (task: string, opts: Options): Promise<void> => {
@@ -7,5 +6,6 @@ export const runLoop = async (task: string, opts: Options): Promise<void> => {
     await runPairedLoop(task, opts);
     return;
   }
+  const { runSingleLoop } = await import("./single-loop");
   await runSingleLoop(task, opts);
 };

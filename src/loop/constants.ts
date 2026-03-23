@@ -32,7 +32,7 @@ Options:
   --format <pretty|raw>                    Log format (default: pretty)
   --review [claude|codex|claudex]          Review on done (default: claudex)
   --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
-  --run-id <id>                            Resume a previous paired loop run by run id
+  --run-id <id>                            Reuse a specific run id; resumes paired runs in paired mode
   --session <id>                           Resume from a paired run id or raw session/thread ID
   --tmux                                   Run in a detached tmux session (name: repo-loop-X)
   --worktree                               Create and run in a fresh git worktree (name: repo-loop-X)
