@@ -15,6 +15,10 @@ type Callback = (text: string) => void;
 type ServeFn = (...args: Parameters<typeof serve>) => ReturnType<typeof serve>;
 type SpawnFn = (...args: Parameters<typeof spawn>) => ReturnType<typeof spawn>;
 type WSRole = "claude" | "frontend";
+export interface ClaudeSdkLaunchOptions {
+  mcpConfig?: string;
+  persistent?: boolean;
+}
 interface WSData {
   role: WSRole;
 }
@@ -204,8 +208,10 @@ class ClaudeSdkClient {
   private closed = false;
   private lastSessionId = "";
   private lock: Promise<void> = Promise.resolve();
+  private mcpConfig = "";
   private model = DEFAULT_CLAUDE_MODEL;
   private port = 0;
+  private persistentSession = false;
   private ready = false;
   private resumeId = "";
   private server: Server | undefined;
@@ -238,6 +244,53 @@ class ClaudeSdkClient {
     this.model = model;
   }
 
+  resolveResumeId(id?: string): string | undefined {
+    return id || this.sessionId || this.lastSessionId || undefined;
+  }
+
+  shouldRestart(
+    model: string,
+    resumeSessionId?: string,
+    options: ClaudeSdkLaunchOptions = {}
+  ): boolean {
+    if (!this.started) {
+      return false;
+    }
+
+    if (this.model !== model) {
+      return true;
+    }
+
+    if (this.mcpConfig !== (options.mcpConfig?.trim() ?? "")) {
+      return true;
+    }
+
+    if (this.persistentSession !== (options.persistent ?? false)) {
+      return true;
+    }
+
+    return Boolean(
+      resumeSessionId &&
+        resumeSessionId !== this.sessionId &&
+        resumeSessionId !== this.lastSessionId
+    );
+  }
+
+  configureLaunch(options: ClaudeSdkLaunchOptions = {}): void {
+    if (this.started) {
+      return;
+    }
+    this.mcpConfig = options.mcpConfig?.trim() ?? "";
+    this.persistentSession = options.persistent ?? false;
+  }
+
+  async restart(): Promise<void> {
+    if (this.turn) {
+      throw new Error("cannot restart claude sdk during an active turn");
+    }
+    await this.cleanup();
+  }
+
   async start(): Promise<void> {
     if (this.started) {
       return;
@@ -259,6 +312,9 @@ class ClaudeSdkClient {
 
       const url = `ws://localhost:${this.port}`;
       const resumeArgs = this.resumeId ? ["--resume", this.resumeId] : [];
+      const mcpArgs = this.mcpConfig
+        ? ["--mcp-config", this.mcpConfig, "--strict-mcp-config"]
+        : [];
       this.resumeId = "";
 
       this.child = spawnFn(
@@ -273,6 +329,7 @@ class ClaudeSdkClient {
           "--verbose",
           "--model",
           this.model,
+          ...mcpArgs,
           "--dangerously-skip-permissions",
           "--sdk-url",
           url,
@@ -652,9 +709,11 @@ class ClaudeSdkClient {
       this.sendUserMessage(prompt);
     });
 
-    // Claude SDK session state is process-bound, so restart per turn to force a
-    // fresh session ID and avoid carrying state across independent loop turns.
-    await this.cleanup();
+    if (!this.persistentSession) {
+      // Claude SDK session state is process-bound, so restart per turn to force a
+      // fresh session ID and avoid carrying state across independent loop turns.
+      await this.cleanup();
+    }
     return result;
   }
 
@@ -718,13 +777,27 @@ const getClient = (): ClaudeSdkClient => {
 
 export const startClaudeSdk = async (
   model = DEFAULT_CLAUDE_MODEL,
-  resumeSessionId?: string
+  resumeSessionId?: string,
+  launchOptions: ClaudeSdkLaunchOptions = {}
 ): Promise<void> => {
   const client = getClient();
-  client.setModel(model);
-  if (resumeSessionId) {
-    client.setResumeId(resumeSessionId);
+  const needsRestart = client.shouldRestart(
+    model,
+    resumeSessionId,
+    launchOptions
+  );
+  const nextResumeId =
+    needsRestart || launchOptions.persistent
+      ? client.resolveResumeId(resumeSessionId)
+      : resumeSessionId;
+  if (needsRestart) {
+    await client.restart();
   }
+  client.setModel(model);
+  if (nextResumeId && !client.hasProcess()) {
+    client.setResumeId(nextResumeId);
+  }
+  client.configureLaunch(launchOptions);
   await client.start();
 };
 

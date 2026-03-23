@@ -19,6 +19,7 @@ import type {
 const EMPTY_DONE_SIGNAL_ERROR = "Invalid --done value: cannot be empty";
 const ONLY_MODE_CONFLICT_ERROR =
   "Cannot combine --claude-only with --codex-only.";
+const INVALID_RUN_ID_ERROR = "Invalid --run-id value: cannot be empty";
 
 const parseAgent = (value: string): Agent => {
   if (value === "claude" || value === "codex") {
@@ -41,7 +42,9 @@ const parseReviewValue = (value: string): ReviewMode => {
   throw new Error(`Invalid --review value: ${value}`);
 };
 
-const parsePlanReviewValue = (value: string | undefined): PlanReviewMode => {
+const maybeParsePlanReviewValue = (
+  value: string | undefined
+): PlanReviewMode | undefined => {
   if (
     value === "other" ||
     value === "claude" ||
@@ -49,6 +52,13 @@ const parsePlanReviewValue = (value: string | undefined): PlanReviewMode => {
     value === "none"
   ) {
     return value;
+  }
+};
+
+const parsePlanReviewValue = (value: string | undefined): PlanReviewMode => {
+  const parsed = maybeParsePlanReviewValue(value);
+  if (parsed) {
+    return parsed;
   }
   throw new Error(`Invalid --review-plan value: ${value}`);
 };
@@ -71,11 +81,14 @@ const requireFlagValue = (arg: string, value: string | undefined): string => {
 const applyValueFlag = (
   flag: ValueFlag,
   value: string,
-  opts: Options
+  opts: Options,
+  onlyAgent?: Agent
 ): void => {
   switch (flag) {
     case "agent":
-      opts.agent = parseAgent(value);
+      if (!onlyAgent) {
+        opts.agent = parseAgent(value);
+      }
       return;
     case "prompt":
       opts.promptInput = value;
@@ -121,6 +134,9 @@ const applyValueFlag = (
         "Invalid --session value: cannot be empty"
       );
       return;
+    case "runId":
+      opts.resumeRunId = requireTrimmedValue(value, INVALID_RUN_ID_ERROR);
+      return;
     case "format":
       opts.format = parseFormat(value);
       return;
@@ -133,8 +149,11 @@ const applyValueFlag = (
 
 const applyOnlyMode = (agent: Agent, opts: Options): void => {
   opts.agent = agent;
+  opts.pairedMode = false;
   opts.review = agent;
-  opts.reviewPlan = agent;
+  if (opts.reviewPlan !== "none") {
+    opts.reviewPlan = agent;
+  }
 };
 
 const parseOnlyModeFlag = (arg: string): Agent | undefined => {
@@ -158,10 +177,30 @@ const parseReviewArg = (
   argv: string[],
   index: number,
   opts: Options,
-  arg: string
+  arg: string,
+  onlyAgent?: Agent
 ): number => {
+  if (onlyAgent) {
+    if (arg.startsWith("--review=")) {
+      parseReviewValue(arg.slice("--review=".length));
+      return index;
+    }
+
+    const next = argv[index + 1];
+    if (next === "claude" || next === "codex" || next === "claudex") {
+      return index + 1;
+    }
+
+    if (next && !next.startsWith("-")) {
+      parseReviewValue(next);
+    }
+
+    return index;
+  }
+
   if (arg.startsWith("--review=")) {
-    opts.review = parseReviewValue(arg.slice("--review=".length));
+    const review = parseReviewValue(arg.slice("--review=".length));
+    opts.review = review;
     return index;
   }
 
@@ -179,20 +218,65 @@ const parsePlanReviewArg = (
   argv: string[],
   index: number,
   opts: Options,
-  arg: string
+  arg: string,
+  onlyAgent?: Agent
 ): number => {
+  if (onlyAgent) {
+    if (arg.startsWith("--review-plan=")) {
+      if (parsePlanReviewValue(arg.slice("--review-plan=".length)) === "none") {
+        opts.reviewPlan = "none";
+      }
+      return index;
+    }
+
+    const reviewPlan = maybeParsePlanReviewValue(argv[index + 1]);
+    if (reviewPlan === "none") {
+      opts.reviewPlan = "none";
+      return index + 1;
+    }
+
+    if (reviewPlan) {
+      return index + 1;
+    }
+
+    return index;
+  }
+
   if (arg.startsWith("--review-plan=")) {
-    opts.reviewPlan = parsePlanReviewValue(arg.slice("--review-plan=".length));
+    const reviewPlan = parsePlanReviewValue(arg.slice("--review-plan=".length));
+    opts.reviewPlan = reviewPlan;
     return index;
   }
 
   const next = argv[index + 1];
-  try {
-    opts.reviewPlan = parsePlanReviewValue(next);
+  const reviewPlan = maybeParsePlanReviewValue(next);
+  if (reviewPlan) {
+    opts.reviewPlan = reviewPlan;
     return index + 1;
-  } catch {
-    opts.reviewPlan = "other";
-    return index;
+  }
+
+  opts.reviewPlan = "other";
+  return index;
+};
+
+const parseRunIdArg = (
+  argv: string[],
+  index: number,
+  opts: Options,
+  arg: string
+): number | undefined => {
+  if (arg.startsWith("--run-id=")) {
+    applyValueFlag(
+      "runId",
+      requireTrimmedValue(arg.slice("--run-id=".length), INVALID_RUN_ID_ERROR),
+      opts
+    );
+    return index + 1;
+  }
+
+  if (arg === "--run-id") {
+    applyValueFlag("runId", requireFlagValue(arg, argv[index + 1]), opts);
+    return index + 2;
   }
 };
 
@@ -277,7 +361,7 @@ const consumeArg = (
 
   if (arg === "--review" || arg.startsWith("--review=")) {
     return {
-      nextIndex: parseReviewArg(argv, index, opts, arg) + 1,
+      nextIndex: parseReviewArg(argv, index, opts, arg, onlyAgent) + 1,
       stop: false,
       onlyAgent,
     };
@@ -285,10 +369,15 @@ const consumeArg = (
 
   if (arg === "--review-plan" || arg.startsWith("--review-plan=")) {
     return {
-      nextIndex: parsePlanReviewArg(argv, index, opts, arg) + 1,
+      nextIndex: parsePlanReviewArg(argv, index, opts, arg, onlyAgent) + 1,
       stop: false,
       onlyAgent,
     };
+  }
+
+  const runIdNextIndex = parseRunIdArg(argv, index, opts, arg);
+  if (runIdNextIndex !== undefined) {
+    return { nextIndex: runIdNextIndex, stop: false, onlyAgent };
   }
 
   if (arg === "--tmux") {
@@ -307,7 +396,7 @@ const consumeArg = (
     if (!value) {
       throw new Error(`Missing value for ${arg}`);
     }
-    applyValueFlag(flag, value, opts);
+    applyValueFlag(flag, value, opts, onlyAgent);
     return { nextIndex: index + 2, stop: false, onlyAgent };
   }
 
@@ -327,7 +416,9 @@ export const parseArgs = (argv: string[]): Options => {
     format: "pretty",
     maxIterations: DEFAULT_MAX_ITERATIONS,
     codexModel: env.LOOP_CODEX_MODEL ?? DEFAULT_CODEX_MODEL,
+    pairedMode: true,
     review: "claudex",
+    resumeRunId: undefined,
     tmux: false,
     worktree: false,
   };

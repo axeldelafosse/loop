@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { panelInternals } from "../../src/loop/panel";
@@ -120,8 +120,36 @@ scratch\t0
 `.trim();
   const rows = panelInternals.parseTmuxSessions(output);
   expect(rows).toEqual([
-    { attached: false, id: 2, session: "repo-loop-2" },
-    { attached: true, id: 10, session: "repo-loop-10" },
+    { attached: false, id: "2", session: "repo-loop-2" },
+    { attached: true, id: "10", session: "repo-loop-10" },
+  ]);
+});
+
+test("parseTmuxSessions keeps alphanumeric loop sessions", () => {
+  const output = `
+repo-loop-2\t0
+repo-loop-alpha\t1
+repo-loop-10\t1
+`.trim();
+  const rows = panelInternals.parseTmuxSessions(output);
+  expect(rows).toEqual([
+    { attached: false, id: "2", session: "repo-loop-2" },
+    { attached: true, id: "10", session: "repo-loop-10" },
+    { attached: true, id: "alpha", session: "repo-loop-alpha" },
+  ]);
+});
+
+test("parseTmuxSessions keeps hyphen and underscore loop sessions", () => {
+  const output = `
+repo-loop-alpha-1\t1
+repo-loop-alpha_1\t0
+repo-loop-abc123\t1
+`.trim();
+  const rows = panelInternals.parseTmuxSessions(output);
+  expect(rows).toEqual([
+    { attached: true, id: "abc123", session: "repo-loop-abc123" },
+    { attached: false, id: "alpha_1", session: "repo-loop-alpha_1" },
+    { attached: true, id: "alpha-1", session: "repo-loop-alpha-1" },
   ]);
 });
 
@@ -133,6 +161,69 @@ test("projectKeyFromCwd matches claude project folder naming", () => {
 
 test("parseTimestampMs returns NaN for invalid timestamp", () => {
   expect(Number.isNaN(panelInternals.parseTimestampMs("invalid"))).toBe(true);
+});
+
+test("collectLoopRuns loads manifests and keeps newest first", () => {
+  const root = mkdtempSync(join(tmpdir(), "loop-runs-"));
+  const first = join(root, "repo-alpha", "7");
+  const second = join(root, "repo-beta", "9");
+  mkdirSync(first, { recursive: true });
+  mkdirSync(second, { recursive: true });
+  writeFileSync(
+    join(first, "manifest.json"),
+    JSON.stringify({
+      claudeSessionId: "claude-alpha",
+      codexThreadId: "codex-alpha",
+      cwd: "/repo-alpha",
+      mode: "paired",
+      pid: 123,
+      status: "running",
+      created_at: "2026-03-20T09:00:00.000Z",
+      updated_at: "2026-03-20T10:00:00.000Z",
+    })
+  );
+  writeFileSync(
+    join(second, "manifest.json"),
+    JSON.stringify({
+      claudeSessionId: "claude-beta",
+      codexThreadId: "codex-beta",
+      cwd: "/repo-beta",
+      mode: "paired",
+      pid: 456,
+      repoId: "repo-beta",
+      runId: "9",
+      status: "done",
+      updatedAt: "2026-03-21T10:00:00.000Z",
+    })
+  );
+
+  const rows = panelInternals.collectLoopRuns(root);
+  rmSync(root, { recursive: true, force: true });
+
+  expect(rows).toEqual([
+    {
+      claudeSessionId: "claude-beta",
+      codexThreadId: "codex-beta",
+      cwd: "/repo-beta",
+      mode: "paired",
+      pid: 456,
+      repoId: "repo-beta",
+      runId: "9",
+      status: "done",
+      updatedAtMs: panelInternals.parseTimestampMs("2026-03-21T10:00:00.000Z"),
+    },
+    {
+      claudeSessionId: "claude-alpha",
+      codexThreadId: "codex-alpha",
+      cwd: "/repo-alpha",
+      mode: "paired",
+      pid: 123,
+      repoId: "repo-alpha",
+      runId: "7",
+      status: "running",
+      updatedAtMs: panelInternals.parseTimestampMs("2026-03-20T10:00:00.000Z"),
+    },
+  ]);
 });
 
 test("reconcileDoneRows moves disappeared instance into done section", () => {
@@ -197,7 +288,20 @@ test("buildLines uses stacked layout on narrow terminals", () => {
         state: "idle",
       },
     ],
-    tmuxRows: [{ attached: false, id: 3, session: "repo-loop-3" }],
+    loopRuns: [
+      {
+        claudeSessionId: "claude-session-1",
+        codexThreadId: "codex-thread-1",
+        cwd: "/Users/me/code/loop",
+        mode: "paired",
+        pid: 100,
+        repoId: "repo",
+        runId: "1",
+        status: "running",
+        updatedAtMs: Date.now() - 5000,
+      },
+    ],
+    tmuxRows: [{ attached: false, id: "3", session: "repo-loop-3" }],
   };
   const doneRows = [
     {
@@ -219,9 +323,14 @@ test("buildLines uses stacked layout on narrow terminals", () => {
   expect(lines).toContain("[running] 1");
   expect(lines).toContain("[done] 1");
   expect(lines).toContain("[tmux] 1");
+  expect(lines).toContain("[loop runs] 1");
   expect(
     lines.some((line) => line.startsWith("id=3 session=repo-loop-3"))
   ).toBe(true);
+  expect(lines.some((line) => line.startsWith("repo/1"))).toBe(true);
+  expect(lines.some((line) => line.includes("claude: claude-session-1"))).toBe(
+    true
+  );
   expect(lines.some((line) => line.startsWith("session: "))).toBe(true);
   expect(lines.some((line) => line.startsWith("final: "))).toBe(true);
 });

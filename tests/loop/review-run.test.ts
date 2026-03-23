@@ -37,6 +37,7 @@ test("runReview approves when all reviewers pass", async () => {
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
   expect(runAgentMock).toHaveBeenCalledTimes(2);
@@ -56,6 +57,7 @@ test("runReview ignores transport noise in combined when parsed has final pass s
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -134,6 +136,7 @@ test("runReview accepts quoted final review signal", async () => {
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -199,6 +202,7 @@ test("runReview accepts pass signal from combined output with parsed body", asyn
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });

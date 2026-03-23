@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { checkGitState, type GitResult } from "../../src/loop/git";
+import {
+  buildLoopName,
+  checkGitState,
+  type GitResult,
+} from "../../src/loop/git";
 
 const ok = (stdout: string): GitResult => ({ exitCode: 0, stderr: "", stdout });
 const fail = (): GitResult => ({ exitCode: 1, stderr: "", stdout: "" });
@@ -81,4 +85,12 @@ test("returns undefined when no upstream is configured", () => {
     },
   });
   expect(result).toBeUndefined();
+});
+
+test("buildLoopName rejects unsafe run ids", () => {
+  expect(() => buildLoopName("repo", "foo..bar")).toThrow("Invalid run id");
+});
+
+test("buildLoopName keeps safe run ids unchanged", () => {
+  expect(buildLoopName("repo", "alpha-1")).toBe("repo-loop-alpha-1");
 });

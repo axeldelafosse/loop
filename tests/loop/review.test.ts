@@ -48,6 +48,7 @@ test("runReview approves only when final line is a valid pass signal", async () 
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -64,6 +65,7 @@ test("runReview accepts quoted final signal and ignores non-final review lines",
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -80,6 +82,7 @@ test("runReview accepts final signal with surrounding whitespace", async () => {
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -99,6 +102,7 @@ test("runReview accepts final signal from combined output with trailing blank li
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -131,6 +135,13 @@ test("runReview accepts quoted final fail with whitespace-only body", async () =
     approved: false,
     consensusFail: false,
     failureCount: 1,
+    failures: [
+      {
+        reason:
+          'Reviewer requested more work. (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+        reviewer: "codex",
+      },
+    ],
     notes:
       '[codex] Reviewer requested more work. (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
   });
@@ -164,6 +175,7 @@ test("runReview accepts final signal when parsed is empty and combined contains 
     approved: true,
     consensusFail: false,
     failureCount: 0,
+    failures: [],
     notes: "",
   });
 });
@@ -309,6 +321,13 @@ test("runReview handles non-zero exit code as deterministic reviewer failure", a
     approved: false,
     consensusFail: false,
     failureCount: 1,
+    failures: [
+      {
+        reason:
+          '[loop] review exited with code 3 (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+        reviewer: "codex",
+      },
+    ],
     notes:
       '[codex] [loop] review exited with code 3 (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
   });
@@ -322,6 +341,12 @@ test("runReview handles reviewer runtime failures", async () => {
     approved: false,
     consensusFail: false,
     failureCount: 1,
+    failures: [
+      {
+        reason: "[loop] review codex failed: network glitch",
+        reviewer: "codex",
+      },
+    ],
     notes: "[codex] [loop] review codex failed: network glitch",
   });
 });

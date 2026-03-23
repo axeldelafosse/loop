@@ -1,3 +1,4 @@
+import { preparePairedOptions } from "./paired-options";
 import { buildPlanPrompt, buildPlanReviewPrompt } from "./prompts";
 import { runAgent, runReviewerAgent } from "./runner";
 import type { Agent, Options, PlanReviewMode } from "./types";
@@ -25,10 +26,37 @@ const resolvePlanReviewer = (
   return mode;
 };
 
+const pairedSessionId = (opts: Options, agent: Agent): string | undefined => {
+  if (!opts.pairedMode) {
+    return undefined;
+  }
+  return agent === "claude"
+    ? opts.pairedSessionIds?.claude
+    : opts.pairedSessionIds?.codex;
+};
+
+const runPlanAgent = (agent: Agent, prompt: string, opts: Options) => {
+  const sessionId = pairedSessionId(opts, agent);
+  return sessionId
+    ? runAgent(agent, prompt, opts, sessionId)
+    : runAgent(agent, prompt, opts);
+};
+
+const runPlanReviewer = (agent: Agent, prompt: string, opts: Options) => {
+  const sessionId = pairedSessionId(opts, agent);
+  return sessionId
+    ? runReviewerAgent(agent, prompt, opts, sessionId)
+    : runReviewerAgent(agent, prompt, opts);
+};
+
 const runPlanMode = async (opts: Options, task: string): Promise<void> => {
+  if (opts.pairedMode) {
+    preparePairedOptions(opts, process.cwd(), false);
+  }
+
   console.log("\n[loop] prompt text detected. creating PLAN.md first.");
   const planPrompt = buildPlanPrompt(task);
-  const result = await runAgent(opts.agent, planPrompt, opts);
+  const result = await runPlanAgent(opts.agent, planPrompt, opts);
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -47,7 +75,7 @@ const runPlanMode = async (opts: Options, task: string): Promise<void> => {
   }
   console.log(`\n[loop] reviewing PLAN.md with ${reviewer}.`);
   const reviewPrompt = buildPlanReviewPrompt(task);
-  const review = await runReviewerAgent(reviewer, reviewPrompt, opts);
+  const review = await runPlanReviewer(reviewer, reviewPrompt, opts);
   if (review.exitCode !== 0) {
     throw new Error(
       `[loop] plan review ${reviewer} exited with code ${review.exitCode}`

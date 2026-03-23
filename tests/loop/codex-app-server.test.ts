@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, mock, test } from "bun:test";
+import { buildCodexBridgeConfigArgs } from "../../src/loop/bridge";
 import { codexAppServerInternals } from "../../src/loop/codex-app-server";
 import type { Options } from "../../src/loop/types";
 
@@ -54,6 +55,7 @@ let modulePromise: Promise<AppServerModule> | undefined;
 let moduleExports: AppServerModule | undefined;
 let processes: TestProcess[] = [];
 let currentHandler: RequestHandler = noopRequestHandler;
+let lastSpawnCommand: string[] = [];
 
 const makeStreamResponse = (
   request: RequestFrame,
@@ -65,6 +67,9 @@ const makeStreamResponse = (
 const installSpawn = (appServerModule: AppServerModule): void => {
   appServerModule.codexAppServerInternals.setSpawnFn(
     (_command: unknown, _options: unknown): unknown => {
+      lastSpawnCommand = Array.isArray(_command)
+        ? _command.map((part) => String(part))
+        : [];
       const writes: string[] = [];
       const killSignals: string[] = [];
       const pid = 10_000 + processes.length + 1;
@@ -184,12 +189,14 @@ const resetState = async (): Promise<void> => {
   modulePromise = undefined;
   processes = [];
   currentHandler = noopRequestHandler;
+  lastSpawnCommand = [];
   appServer.codexAppServerInternals.restoreSpawnFn();
   appServer.codexAppServerInternals.restoreConnectWsFn();
 };
 
 afterEach(async () => {
   await resetState();
+  mock.restore();
 });
 
 test("parseLine returns strict JSON frames only", () => {
@@ -220,6 +227,56 @@ test("startAppServer fails fast when initialize returns an error", async () => {
     appServer.CodexAppServerFallbackError
   );
   expect(latestWrites().length).toBeGreaterThan(0);
+});
+
+test("startAppServer forwards config overrides into the app-server command", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  await appServer.startAppServer({
+    configValues: ['mcp_servers.bridge.command="/bin/echo"'],
+    persistentThread: true,
+  });
+
+  expect(lastSpawnCommand.slice(0, 5)).toEqual([
+    "codex",
+    "-c",
+    'mcp_servers.bridge.command="/bin/echo"',
+    "app-server",
+    "--listen",
+  ]);
+  expect(lastSpawnCommand[5]).toContain("ws://0.0.0.0:");
+});
+
+test("startAppServer normalizes codex bridge config args before spawning", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  await appServer.startAppServer({
+    configValues: buildCodexBridgeConfigArgs("/tmp/loop-run", "codex"),
+  });
+
+  expect(lastSpawnCommand.filter((value) => value === "-c")).toHaveLength(2);
+  expect(lastSpawnCommand).toContain("app-server");
+  expect(lastSpawnCommand).not.toContain("-c,-c");
+  const bridgeArgs = lastSpawnCommand.slice(
+    lastSpawnCommand.indexOf("-c"),
+    lastSpawnCommand.indexOf("app-server")
+  );
+  expect(bridgeArgs).toEqual([
+    "-c",
+    expect.stringContaining("mcp_servers.loop-bridge.command="),
+    "-c",
+    expect.stringContaining("mcp_servers.loop-bridge.args="),
+  ]);
 });
 
 test("runCodexTurn promotes thread/start unsupported errors to fallback errors", async () => {
@@ -264,6 +321,137 @@ test("runCodexTurn promotes turn/start unsupported errors to fallback errors", a
       onRaw: () => undefined,
     })
   ).rejects.toBeInstanceOf(appServer.CodexAppServerFallbackError);
+});
+
+test("persistent codex threads are reused across turns", async () => {
+  const appServer = await getModule();
+  let threadStarts = 0;
+  let turnStarts = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      threadStarts += 1;
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      turnStarts += 1;
+      const turnId = `turn-${turnStarts}`;
+      write({ id: request.id, result: { turn: { id: turnId } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: { turnId, turn: { id: turnId, status: "completed" } },
+        });
+      }, 0);
+    }
+  };
+
+  await appServer.startAppServer({ persistentThread: true });
+  await appServer.runCodexTurn("first", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+  await appServer.runCodexTurn("second", makeOptions(), {
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(threadStarts).toBe(1);
+  expect(turnStarts).toBe(2);
+});
+
+test("startAppServer eagerly creates a persistent thread when given a model", async () => {
+  const appServer = await getModule();
+  let threadStarts = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      threadStarts += 1;
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+    }
+  };
+
+  await appServer.startAppServer({
+    persistentThread: true,
+    threadModel: "test-model",
+  });
+
+  expect(threadStarts).toBe(1);
+  expect(appServer.getLastCodexThreadId()).toBe("thread-1");
+});
+
+test("bridge-configured planning keeps the paired Codex thread alive for startup", async () => {
+  const appServer = await getModule();
+  let threadStarts = 0;
+  let turnStarts = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      threadStarts += 1;
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      turnStarts += 1;
+      const turnId = `turn-${turnStarts}`;
+      write({ id: request.id, result: { turn: { id: turnId } } });
+      setTimeout(() => {
+        write({
+          method: "turn/completed",
+          params: { turnId, turn: { id: turnId, status: "completed" } },
+        });
+      }, 0);
+    }
+  };
+
+  const bridgeArgs = buildCodexBridgeConfigArgs("/tmp/loop-run", "codex");
+  const opts: Options = {
+    ...makeOptions(),
+    codexMcpConfigArgs: bridgeArgs,
+    pairedMode: true,
+  };
+
+  await appServer.startAppServer({
+    configValues: bridgeArgs,
+    persistentThread: true,
+  });
+  const result = await appServer.runCodexTurn(
+    "Plan mode:\nTask:\nship feature",
+    opts,
+    {
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    }
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(processes).toHaveLength(1);
+  expect(lastSpawnCommand.slice(0, bridgeArgs.length + 2)).toEqual([
+    "codex",
+    ...bridgeArgs,
+    "app-server",
+  ]);
+
+  await appServer.startAppServer({
+    configValues: bridgeArgs,
+    persistentThread: true,
+    threadModel: "test-model",
+  });
+
+  expect(processes).toHaveLength(1);
+  expect(threadStarts).toBe(1);
+  expect(turnStarts).toBe(1);
+  expect(appServer.getLastCodexThreadId()).toBe("thread-1");
 });
 
 test("runCodexTurn recovers after unexpected exit", async () => {
@@ -695,18 +883,26 @@ test("interruptAppServer kills detached process group when pid is available", as
   }
 });
 
-test("runCodexTurn recovers after an unexpected app-server exit and can restart", async () => {
+test("persistent codex thread survives an unexpected app-server restart", async () => {
   const appServer = await getModule();
+  let threadStarts = 0;
+  const turnThreadIds: string[] = [];
   currentHandler = (request, write) => {
     if (request.method === "initialize") {
       write({ id: request.id, result: {} });
       return;
     }
     if (request.method === "thread/start") {
+      threadStarts += 1;
       write({ id: request.id, result: { thread: { id: "thread-1" } } });
       return;
     }
     if (request.method === "turn/start") {
+      turnThreadIds.push(
+        String(
+          (request.params as { threadId?: unknown } | undefined)?.threadId ?? ""
+        )
+      );
       write({ id: request.id, result: { turn: { id: "turn-1" } } });
       setTimeout(() => {
         const latest = processes.at(-1);
@@ -715,6 +911,7 @@ test("runCodexTurn recovers after an unexpected app-server exit and can restart"
     }
   };
 
+  await appServer.startAppServer({ persistentThread: true });
   await expect(
     appServer.runCodexTurn("say hi", makeOptions(), {
       onParsed: () => undefined,
@@ -728,10 +925,16 @@ test("runCodexTurn recovers after an unexpected app-server exit and can restart"
       return;
     }
     if (request.method === "thread/start") {
-      write({ id: request.id, result: { thread: { id: "thread-2" } } });
-      return;
+      throw new Error(
+        "expected restart to reuse the existing persistent thread"
+      );
     }
     if (request.method === "turn/start") {
+      turnThreadIds.push(
+        String(
+          (request.params as { threadId?: unknown } | undefined)?.threadId ?? ""
+        )
+      );
       write({ id: request.id, result: { turn: { id: "turn-2" } } });
       setTimeout(() => {
         write({
@@ -745,10 +948,13 @@ test("runCodexTurn recovers after an unexpected app-server exit and can restart"
     }
   };
 
-  await appServer.startAppServer();
+  await appServer.startAppServer({ persistentThread: true });
   const result = await appServer.runCodexTurn("say hi", makeOptions(), {
     onParsed: () => undefined,
     onRaw: () => undefined,
   });
   expect(result.exitCode).toBe(0);
+  expect(threadStarts).toBe(1);
+  expect(turnThreadIds).toEqual(["thread-1", "thread-1"]);
+  expect(appServer.getLastCodexThreadId()).toBe("thread-1");
 });

@@ -1,4 +1,12 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createRunManifest,
+  resolveRunStorage,
+  writeRunManifest,
+} from "../../src/loop/run-state";
 import type { Options } from "../../src/loop/types";
 import { maybeEnterWorktree, worktreeInternals } from "../../src/loop/worktree";
 
@@ -14,6 +22,38 @@ const makeOptions = (overrides: Partial<Options> = {}): Options => ({
   worktree: false,
   ...overrides,
 });
+
+const makeTempHome = (): string =>
+  mkdtempSync(join(tmpdir(), "loop-worktree-"));
+
+const withTempHomeRunManifest = async (
+  runId: string,
+  fn: (home: string) => void | Promise<void>,
+  manifestOverrides: Partial<Parameters<typeof createRunManifest>[0]> = {}
+): Promise<void> => {
+  const home = makeTempHome();
+  try {
+    const storage = resolveRunStorage(runId, process.cwd(), home);
+    writeRunManifest(
+      storage.manifestPath,
+      createRunManifest(
+        {
+          cwd: process.cwd(),
+          mode: "paired",
+          pid: 1234,
+          repoId: storage.repoId,
+          runId,
+          status: "running",
+          ...manifestOverrides,
+        },
+        "2026-03-22T10:00:00.000Z"
+      )
+    );
+    await fn(home);
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+  }
+};
 
 test("maybeEnterWorktree is a no-op when --worktree is disabled", () => {
   const gitCalls: string[][] = [];
@@ -351,6 +391,523 @@ test("maybeEnterWorktree honors requested run id from env", () => {
     "repo-loop-4",
     "/repo-loop-4",
   ]);
+});
+
+test("maybeEnterWorktree keeps explicit run id in single-agent mode", () => {
+  const gitCalls: string[][] = [];
+  const env: NodeJS.ProcessEnv = {};
+
+  maybeEnterWorktree(
+    makeOptions({ worktree: true, pairedMode: false, resumeRunId: "4" }),
+    {
+      chdir: (): void => undefined,
+      cwd: () => "/repo",
+      env,
+      log: (): void => undefined,
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-4") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    }
+  );
+
+  expect(gitCalls).toContainEqual([
+    "worktree",
+    "add",
+    "-b",
+    "repo-loop-4",
+    "/repo-loop-4",
+  ]);
+  expect(env.LOOP_RUN_BASE).toBe("repo");
+  expect(env.LOOP_RUN_ID).toBe("4");
+});
+
+test("maybeEnterWorktree keeps alphanumeric run id in single-agent mode", () => {
+  const gitCalls: string[][] = [];
+  const env: NodeJS.ProcessEnv = {};
+
+  maybeEnterWorktree(
+    makeOptions({ worktree: true, pairedMode: false, resumeRunId: "alpha" }),
+    {
+      chdir: (): void => undefined,
+      cwd: () => "/repo",
+      env,
+      log: (): void => undefined,
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-alpha") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    }
+  );
+
+  expect(gitCalls).toContainEqual([
+    "worktree",
+    "add",
+    "-b",
+    "repo-loop-alpha",
+    "/repo-loop-alpha",
+  ]);
+  expect(env.LOOP_RUN_BASE).toBe("repo");
+  expect(env.LOOP_RUN_ID).toBe("alpha");
+});
+
+test("maybeEnterWorktree resolves paired run id through an existing manifest", async () => {
+  await withTempHomeRunManifest("alpha", (home) => {
+    const gitCalls: string[][] = [];
+    const env: NodeJS.ProcessEnv = { HOME: home };
+
+    maybeEnterWorktree(makeOptions({ worktree: true, resumeRunId: "alpha" }), {
+      chdir: (): void => undefined,
+      cwd: () => process.cwd(),
+      env,
+      log: (): void => undefined,
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-superproject-working-tree") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (cmd === "rev-parse --git-dir") {
+          return { exitCode: 0, stderr: "", stdout: ".git\n" };
+        }
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-alpha") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+
+    expect(gitCalls).toContainEqual([
+      "show-ref",
+      "--verify",
+      "--quiet",
+      "refs/heads/repo-loop-alpha",
+    ]);
+    expect(gitCalls).toContainEqual([
+      "worktree",
+      "add",
+      "-b",
+      "repo-loop-alpha",
+      "/repo-loop-alpha",
+    ]);
+    expect(env.LOOP_RUN_BASE).toBe("repo");
+    expect(env.LOOP_RUN_ID).toBe("alpha");
+  });
+});
+
+test("maybeEnterWorktree rejects unknown paired run id before creating a worktree", () => {
+  const home = makeTempHome();
+  const originalHome = process.env.HOME;
+  process.env.HOME = home;
+
+  const gitCalls: string[][] = [];
+
+  try {
+    expect(() =>
+      maybeEnterWorktree(makeOptions({ worktree: true, resumeRunId: "typo" }), {
+        chdir: (): void => undefined,
+        cwd: () => process.cwd(),
+        env: { HOME: home },
+        log: (): void => undefined,
+        pathExists: () => false,
+        runGit: (args: string[]) => {
+          gitCalls.push(args);
+          const cmd = args.join(" ");
+          if (cmd === "rev-parse --show-superproject-working-tree") {
+            return { exitCode: 1, stderr: "", stdout: "" };
+          }
+          if (cmd === "rev-parse --git-dir") {
+            return { exitCode: 0, stderr: "", stdout: ".git\n" };
+          }
+          if (cmd === "rev-parse --show-toplevel") {
+            return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+          }
+          if (cmd === "rev-parse --verify HEAD") {
+            return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      })
+    ).toThrow('[loop] paired run "typo" does not exist');
+    expect(
+      gitCalls.some((args) => args[0] === "worktree" && args[1] === "add")
+    ).toBe(false);
+  } finally {
+    if (originalHome === undefined) {
+      Reflect.deleteProperty(process.env, "HOME");
+    } else {
+      process.env.HOME = originalHome;
+    }
+    rmSync(home, { force: true, recursive: true });
+  }
+});
+
+test("maybeEnterWorktree honors paired run resume from --session", async () => {
+  await withTempHomeRunManifest("alpha", (home) => {
+    const gitCalls: string[][] = [];
+    const env: NodeJS.ProcessEnv = { HOME: home };
+
+    maybeEnterWorktree(makeOptions({ worktree: true, sessionId: "alpha" }), {
+      chdir: (): void => undefined,
+      cwd: () => process.cwd(),
+      env,
+      log: (): void => undefined,
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-superproject-working-tree") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (cmd === "rev-parse --git-dir") {
+          return { exitCode: 0, stderr: "", stdout: ".git\n" };
+        }
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-alpha") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+
+    expect(gitCalls).toContainEqual([
+      "show-ref",
+      "--verify",
+      "--quiet",
+      "refs/heads/repo-loop-alpha",
+    ]);
+    expect(gitCalls).toContainEqual([
+      "worktree",
+      "add",
+      "-b",
+      "repo-loop-alpha",
+      "/repo-loop-alpha",
+    ]);
+    expect(env.LOOP_RUN_BASE).toBe("repo");
+    expect(env.LOOP_RUN_ID).toBe("alpha");
+  });
+});
+
+test("maybeEnterWorktree resolves raw stored session ids from --session", async () => {
+  await withTempHomeRunManifest(
+    "alpha",
+    (home) => {
+      const gitCalls: string[][] = [];
+      const env: NodeJS.ProcessEnv = { HOME: home };
+
+      maybeEnterWorktree(
+        makeOptions({ worktree: true, sessionId: "codex-thread-1" }),
+        {
+          chdir: (): void => undefined,
+          cwd: () => process.cwd(),
+          env,
+          log: (): void => undefined,
+          pathExists: () => false,
+          runGit: (args: string[]) => {
+            gitCalls.push(args);
+            const cmd = args.join(" ");
+            if (cmd === "rev-parse --show-superproject-working-tree") {
+              return { exitCode: 1, stderr: "", stdout: "" };
+            }
+            if (cmd === "rev-parse --git-dir") {
+              return { exitCode: 0, stderr: "", stdout: ".git\n" };
+            }
+            if (cmd === "rev-parse --show-toplevel") {
+              return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+            }
+            if (cmd === "rev-parse --verify HEAD") {
+              return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+            }
+            if (
+              cmd === "show-ref --verify --quiet refs/heads/repo-loop-alpha"
+            ) {
+              return { exitCode: 1, stderr: "", stdout: "" };
+            }
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+        }
+      );
+
+      expect(gitCalls).toContainEqual([
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/repo-loop-alpha",
+      ]);
+      expect(gitCalls).toContainEqual([
+        "worktree",
+        "add",
+        "-b",
+        "repo-loop-alpha",
+        "/repo-loop-alpha",
+      ]);
+      expect(env.LOOP_RUN_BASE).toBe("repo");
+      expect(env.LOOP_RUN_ID).toBe("alpha");
+    },
+    { codexThreadId: "codex-thread-1" }
+  );
+});
+
+test("maybeEnterWorktree ignores an unresolved raw session id in paired mode", () => {
+  const home = makeTempHome();
+  const gitCalls: string[][] = [];
+  const env: NodeJS.ProcessEnv = { HOME: home };
+
+  try {
+    expect(() =>
+      maybeEnterWorktree(
+        makeOptions({ worktree: true, sessionId: "claude-session-raw" }),
+        {
+          chdir: (): void => undefined,
+          cwd: () => process.cwd(),
+          env,
+          log: (): void => undefined,
+          pathExists: () => false,
+          runGit: (args: string[]) => {
+            gitCalls.push(args);
+            const cmd = args.join(" ");
+            if (cmd === "rev-parse --show-superproject-working-tree") {
+              return { exitCode: 1, stderr: "", stdout: "" };
+            }
+            if (cmd === "rev-parse --git-dir") {
+              return { exitCode: 0, stderr: "", stdout: ".git\n" };
+            }
+            if (cmd === "rev-parse --show-toplevel") {
+              return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+            }
+            if (cmd === "rev-parse --verify HEAD") {
+              return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+            }
+            if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-1") {
+              return { exitCode: 1, stderr: "", stdout: "" };
+            }
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+        }
+      )
+    ).not.toThrow();
+
+    expect(gitCalls).toContainEqual([
+      "worktree",
+      "add",
+      "-b",
+      "repo-loop-1",
+      "/repo-loop-1",
+    ]);
+    expect(env.LOOP_RUN_ID).toBe("1");
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+  }
+});
+
+test("maybeEnterWorktree keeps raw --session values in single-agent mode", () => {
+  const gitCalls: string[][] = [];
+  const env: NodeJS.ProcessEnv = {};
+
+  maybeEnterWorktree(
+    makeOptions({
+      worktree: true,
+      pairedMode: false,
+      sessionId: "claude-session-1",
+    }),
+    {
+      chdir: (): void => undefined,
+      cwd: () => "/repo",
+      env,
+      log: (): void => undefined,
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-superproject-working-tree") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (cmd === "rev-parse --git-dir") {
+          return { exitCode: 0, stderr: "", stdout: ".git\n" };
+        }
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-1") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    }
+  );
+
+  expect(gitCalls).toEqual([
+    ["rev-parse", "--show-superproject-working-tree"],
+    ["rev-parse", "--git-dir"],
+    ["rev-parse", "--show-toplevel"],
+    ["rev-parse", "--verify", "HEAD"],
+    ["show-ref", "--verify", "--quiet", "refs/heads/repo-loop-1"],
+    ["worktree", "add", "-b", "repo-loop-1", "/repo-loop-1"],
+  ]);
+  expect(env.LOOP_RUN_BASE).toBe("repo");
+  expect(env.LOOP_RUN_ID).toBe("1");
+});
+
+test("maybeEnterWorktree re-enters an existing worktree for requested run id", async () => {
+  await withTempHomeRunManifest("4", (home) => {
+    const gitCalls: string[][] = [];
+    const chdirs: string[] = [];
+    const env: NodeJS.ProcessEnv = { HOME: home };
+    const logs: string[] = [];
+
+    maybeEnterWorktree(makeOptions({ worktree: true, resumeRunId: "4" }), {
+      chdir: (path: string) => {
+        chdirs.push(path);
+      },
+      cwd: () => process.cwd(),
+      env,
+      log: (line: string) => {
+        logs.push(line);
+      },
+      pathExists: (path: string) => path === "/repo-loop-4",
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-superproject-working-tree") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (cmd === "rev-parse --git-dir") {
+          return { exitCode: 0, stderr: "", stdout: ".git\n" };
+        }
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-4") {
+          return { exitCode: 0, stderr: "", stdout: "deadbeef\n" };
+        }
+        throw new Error(`unexpected git call: ${cmd}`);
+      },
+    });
+
+    expect(gitCalls).toEqual([
+      ["rev-parse", "--show-superproject-working-tree"],
+      ["rev-parse", "--git-dir"],
+      ["rev-parse", "--show-toplevel"],
+      ["rev-parse", "--verify", "HEAD"],
+      ["show-ref", "--verify", "--quiet", "refs/heads/repo-loop-4"],
+    ]);
+    expect(chdirs).toEqual(["/repo-loop-4"]);
+    expect(logs).toContain('[loop] re-entered worktree "/repo-loop-4"');
+    expect(logs).toContain('[loop] switched to branch "repo-loop-4"');
+    expect(env.LOOP_RUN_BASE).toBe("repo");
+    expect(env.LOOP_RUN_ID).toBe("4");
+  });
+});
+
+test("maybeEnterWorktree re-enters requested run id when the worktree directory is missing", async () => {
+  await withTempHomeRunManifest("4", (home) => {
+    const gitCalls: string[][] = [];
+    const chdirs: string[] = [];
+    const env: NodeJS.ProcessEnv = { HOME: home };
+    const logs: string[] = [];
+
+    maybeEnterWorktree(makeOptions({ worktree: true, resumeRunId: "4" }), {
+      chdir: (path: string) => {
+        chdirs.push(path);
+      },
+      cwd: () => process.cwd(),
+      env,
+      log: (line: string) => {
+        logs.push(line);
+      },
+      pathExists: () => false,
+      runGit: (args: string[]) => {
+        gitCalls.push(args);
+        const cmd = args.join(" ");
+        if (cmd === "rev-parse --show-superproject-working-tree") {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (cmd === "rev-parse --git-dir") {
+          return { exitCode: 0, stderr: "", stdout: ".git\n" };
+        }
+        if (cmd === "rev-parse --show-toplevel") {
+          return { exitCode: 0, stderr: "", stdout: "/repo\n" };
+        }
+        if (cmd === "rev-parse --verify HEAD") {
+          return { exitCode: 0, stderr: "", stdout: "abc123\n" };
+        }
+        if (cmd === "show-ref --verify --quiet refs/heads/repo-loop-4") {
+          return { exitCode: 0, stderr: "", stdout: "deadbeef\n" };
+        }
+        if (cmd === "worktree add /repo-loop-4 repo-loop-4") {
+          const addCount = gitCalls.filter(
+            (row) => row.join(" ") === cmd
+          ).length;
+          if (addCount === 1) {
+            return {
+              exitCode: 1,
+              stderr:
+                "fatal: '/repo-loop-4' is a missing but already registered worktree",
+              stdout: "",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        if (cmd === "worktree prune") {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        throw new Error(`unexpected git call: ${cmd}`);
+      },
+    });
+
+    expect(gitCalls).toContainEqual(["worktree", "prune"]);
+    expect(gitCalls).toContainEqual([
+      "worktree",
+      "add",
+      "/repo-loop-4",
+      "repo-loop-4",
+    ]);
+    expect(chdirs).toEqual(["/repo-loop-4"]);
+    expect(logs).toContain('[loop] re-entered worktree "/repo-loop-4"');
+    expect(logs).toContain('[loop] switched to branch "repo-loop-4"');
+    expect(env.LOOP_RUN_BASE).toBe("repo");
+    expect(env.LOOP_RUN_ID).toBe("4");
+  });
 });
 
 test("maybeEnterWorktree prunes stale registration and retries same id", () => {

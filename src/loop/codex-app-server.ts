@@ -7,6 +7,12 @@ import type { Options, RunResult } from "./types";
 type ExitSignal = "SIGINT" | "SIGTERM";
 type TransportMode = "app-server" | "exec";
 type Callback = (text: string) => void;
+export interface AppServerLaunchOptions {
+  configValues?: string[];
+  persistentThread?: boolean;
+  resumeThreadId?: string;
+  threadModel?: string;
+}
 interface RunCodexTurnCallbacks {
   onParsed?: Callback;
   onRaw: Callback;
@@ -85,6 +91,30 @@ const isString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 const asString = (value: unknown): string | undefined =>
   isString(value) ? value : undefined;
+const normalizeConfigValues = (values: string[] = []): string[] => {
+  const normalized: string[] = [];
+
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (!value) {
+      continue;
+    }
+    if (value === "-c") {
+      const next = values[index + 1];
+      if (next) {
+        normalized.push(next);
+      }
+      index += 1;
+      continue;
+    }
+    normalized.push(value);
+  }
+
+  return normalized;
+};
+const sameConfigValues = (left: string[], right: string[]): boolean =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -214,6 +244,7 @@ export const codexAppServerInternals = {
   parseText,
   extractTurnId,
   extractThreadId,
+  normalizeConfigValues,
   parseErrorText,
   setSpawnFn: (next: SpawnFn): void => {
     spawnFn = next;
@@ -231,9 +262,12 @@ export const codexAppServerInternals = {
 
 class AppServerClient {
   private child: ReturnType<typeof spawn> | undefined;
+  private configValues: string[] = [];
   private ws: import("./ws-client").WsClient | undefined;
   private closed = false;
   private lastThreadId = "";
+  private persistentThread = false;
+  private threadModel = "";
   private started = false;
   private ready = false;
   private requestId = 1;
@@ -253,8 +287,42 @@ class AppServerClient {
     return this.child !== undefined;
   }
 
+  needsRestart(options: AppServerLaunchOptions = {}): boolean {
+    if (!this.started) {
+      return false;
+    }
+    return !sameConfigValues(
+      this.configValues,
+      normalizeConfigValues(options.configValues)
+    );
+  }
+
+  configureLaunch(options: AppServerLaunchOptions = {}): void {
+    this.configValues = normalizeConfigValues(options.configValues);
+    this.persistentThread = options.persistentThread ?? false;
+    if (options.resumeThreadId !== undefined) {
+      this.lastThreadId = options.resumeThreadId;
+    }
+    this.threadModel = options.threadModel ?? "";
+  }
+
+  private async ensurePersistentLaunchThread(): Promise<void> {
+    if (
+      !(
+        this.ready &&
+        this.persistentThread &&
+        !this.lastThreadId &&
+        this.threadModel
+      )
+    ) {
+      return;
+    }
+    await this.ensureThread(this.threadModel);
+  }
+
   async start(): Promise<void> {
     if (this.started) {
+      await this.ensurePersistentLaunchThread();
       return;
     }
     this.started = true;
@@ -262,8 +330,9 @@ class AppServerClient {
       const port = await this.findPort();
       const listenUrl = `ws://0.0.0.0:${port}`;
       const connectUrl = `ws://127.0.0.1:${port}`;
+      const configArgs = this.configValues.flatMap((value) => ["-c", value]);
       const child = spawnFn(
-        [APP_SERVER_CMD, "app-server", "--listen", listenUrl],
+        [APP_SERVER_CMD, ...configArgs, "app-server", "--listen", listenUrl],
         {
           detached: DETACH_CHILD_PROCESS,
           env: process.env,
@@ -301,6 +370,7 @@ class AppServerClient {
         capabilities: { experimentalApi: true },
       });
       this.ready = true;
+      await this.ensurePersistentLaunchThread();
     } catch (error) {
       const ws = this.ws;
       this.ws = undefined;
@@ -399,6 +469,9 @@ class AppServerClient {
     if (resumeThreadId) {
       this.lastThreadId = resumeThreadId;
       return resumeThreadId;
+    }
+    if (this.persistentThread && this.lastThreadId) {
+      return this.lastThreadId;
     }
     const response = await this.sendRequest(METHOD_THREAD_START, {
       model,
@@ -903,8 +976,22 @@ const getClient = (): AppServerClient => {
 export const useAppServer = (): boolean =>
   process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC;
 
-export const startAppServer = async (): Promise<void> => {
-  await getClient().start();
+export const startAppServer = async (
+  options: AppServerLaunchOptions = {}
+): Promise<void> => {
+  const existing = singleton;
+  const shouldRestart = existing?.needsRestart(options) ?? false;
+  const resumeThreadId =
+    options.resumeThreadId ??
+    (options.persistentThread ? existing?.getLastThreadId() : undefined);
+  if (shouldRestart) {
+    await closeAppServer();
+  }
+  const client = getClient();
+  client.configureLaunch(
+    resumeThreadId === undefined ? options : { ...options, resumeThreadId }
+  );
+  await client.start();
 };
 
 export const runCodexTurn = (

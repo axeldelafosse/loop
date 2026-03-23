@@ -37,6 +37,8 @@ const makeOptions = (): Options => ({
 });
 
 let lastSpawnCommand: string[] = [];
+let spawnCount = 0;
+let disconnectActiveClaude: (() => void) | undefined;
 
 const asRecord = (value: unknown): JsonRecord => {
   if (typeof value === "object" && value !== null) {
@@ -68,6 +70,7 @@ const installHarness = (onUserMessage: UserMessageHandler): string[] => {
     lastSpawnCommand = Array.isArray(_command)
       ? _command.map((part) => String(part))
       : [];
+    spawnCount += 1;
 
     const currentHandlers = handlers;
     let stdoutController:
@@ -136,6 +139,9 @@ const installHarness = (onUserMessage: UserMessageHandler): string[] => {
         }
       },
     };
+    disconnectActiveClaude = () => {
+      socket.close();
+    };
 
     queueMicrotask(() => {
       currentHandlers.open(socket);
@@ -181,7 +187,9 @@ const installHarness = (onUserMessage: UserMessageHandler): string[] => {
 
 afterEach(async () => {
   await closeClaudeSdk();
+  disconnectActiveClaude = undefined;
   lastSpawnCommand = [];
+  spawnCount = 0;
   claudeSdkInternals.restoreSpawnFn();
   claudeSdkInternals.restoreServeFn();
   claudeSdkInternals.restoreCountChildProcessesFn();
@@ -197,6 +205,19 @@ test("startClaudeSdk uses the provided model", async () => {
   const modelArgIndex = lastSpawnCommand.indexOf("--model");
   expect(modelArgIndex).toBeGreaterThan(-1);
   expect(lastSpawnCommand[modelArgIndex + 1]).toBe("claude-review");
+});
+
+test("startClaudeSdk forwards mcp config when provided", async () => {
+  installHarness(() => undefined);
+
+  await startClaudeSdk("claude-review", undefined, {
+    mcpConfig: "/tmp/loop-bridge.json",
+    persistent: true,
+  });
+
+  const mcpArgIndex = lastSpawnCommand.indexOf("--mcp-config");
+  expect(mcpArgIndex).toBeGreaterThan(-1);
+  expect(lastSpawnCommand[mcpArgIndex + 1]).toBe("/tmp/loop-bridge.json");
 });
 
 test("runClaudeTurn resolves immediately when no background task is detected", async () => {
@@ -262,6 +283,94 @@ test("runClaudeTurn drains background Task workers then sends continuation", asy
   expect(pollCount).toBeGreaterThanOrEqual(3);
   expect(userMessages[1]).toBe(claudeSdkInternals.BACKGROUND_TASK_CONTINUATION);
   expect(result.parsed).toBe("final answer");
+});
+
+test("persistent Claude sessions stay attached across turns", async () => {
+  const userMessages = installHarness(({ send }) => {
+    send({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "ok" }] },
+    });
+    send({ type: "result", is_error: false });
+  });
+
+  await startClaudeSdk("claude-review", undefined, { persistent: true });
+
+  const first = await runClaudeTurn("first", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+  const second = await runClaudeTurn("second", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(first.parsed).toBe("ok");
+  expect(second.parsed).toBe("ok");
+  expect(userMessages).toEqual(["first", "second"]);
+  expect(spawnCount).toBe(1);
+});
+
+test("startClaudeSdk restarts a persistent session when the model changes", async () => {
+  installHarness(() => undefined);
+
+  await startClaudeSdk("claude-work", undefined, { persistent: true });
+  await startClaudeSdk("claude-review", undefined, { persistent: true });
+
+  const modelArgIndex = lastSpawnCommand.indexOf("--model");
+  const resumeArgIndex = lastSpawnCommand.indexOf("--resume");
+  expect(spawnCount).toBe(2);
+  expect(modelArgIndex).toBeGreaterThan(-1);
+  expect(lastSpawnCommand[modelArgIndex + 1]).toBe("claude-review");
+  expect(resumeArgIndex).toBeGreaterThan(-1);
+  expect(lastSpawnCommand[resumeArgIndex + 1]).toBe("session-1");
+});
+
+test("startClaudeSdk resumes a persistent session after unexpected disconnect", async () => {
+  const userMessages = installHarness(({ index, send }) => {
+    if (index === 0) {
+      queueMicrotask(() => {
+        disconnectActiveClaude?.();
+      });
+      return;
+    }
+    send({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "ok" }] },
+    });
+    send({ type: "result", is_error: false });
+  });
+
+  await startClaudeSdk("claude-review", undefined, { persistent: true });
+  expect(disconnectActiveClaude).toBeDefined();
+
+  await expect(
+    runClaudeTurn("first", makeOptions(), {
+      onDelta: () => undefined,
+      onParsed: () => undefined,
+      onRaw: () => undefined,
+    })
+  ).rejects.toThrow("claude sdk connection closed unexpectedly");
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  await startClaudeSdk("claude-review", undefined, { persistent: true });
+
+  const resumeArgIndex = lastSpawnCommand.indexOf("--resume");
+  expect(spawnCount).toBe(2);
+  expect(resumeArgIndex).toBeGreaterThan(-1);
+  expect(lastSpawnCommand[resumeArgIndex + 1]).toBe("session-1");
+
+  const result = await runClaudeTurn("second", makeOptions(), {
+    onDelta: () => undefined,
+    onParsed: () => undefined,
+    onRaw: () => undefined,
+  });
+
+  expect(result.parsed).toBe("ok");
+  expect(userMessages).toEqual(["first", "second"]);
 });
 
 test("non-Task tools with run_in_background do not trigger drain mode", async () => {

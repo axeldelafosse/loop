@@ -78,6 +78,7 @@ test("parseArgs returns expected defaults when proof is omitted", () => {
   expect(opts.promptInput).toBeUndefined();
   expect(opts.review).toBe("claudex");
   expect(opts.reviewPlan).toBeUndefined();
+  expect(opts.resumeRunId).toBeUndefined();
   expect(opts.tmux).toBe(false);
   expect(opts.worktree).toBe(false);
 });
@@ -117,6 +118,8 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
     "3",
     "--done",
     "<done/>",
+    "--run-id",
+    "17",
     "--proof",
     "verify this",
     "--format",
@@ -134,6 +137,7 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
   expect(opts.promptInput).toBe("PLAN.md");
   expect(opts.maxIterations).toBe(3);
   expect(opts.doneSignal).toBe("<done/>");
+  expect(opts.resumeRunId).toBe("17");
   expect(opts.proof).toBe("verify this");
   expect(opts.format).toBe("pretty");
   expect(opts.review).toBe("claudex");
@@ -142,11 +146,13 @@ test("parseArgs handles all value flags and explicit reviewer", () => {
   expect(opts.claudeReviewerModel).toBe("claude-review");
 });
 
-test("parseArgs treats bare --review as claudex when no reviewer follows", () => {
-  const opts = parseArgs(["--review", "ship it", "--proof", "verify"]);
-
-  expect(opts.review).toBe("claudex");
-  expect(opts.promptInput).toBe("ship it");
+test("parseArgs rejects invalid --review values in only-mode", () => {
+  expect(() =>
+    parseArgs(["--claude-only", "--review", "banana", "--proof", "x"])
+  ).toThrow("Invalid --review value: banana");
+  expect(() =>
+    parseArgs(["--codex-only", "--review=banana", "--proof", "x"])
+  ).toThrow("Invalid --review value: banana");
 });
 
 test("parseArgs uses reviewer after --review when valid", () => {
@@ -186,6 +192,28 @@ test("parseArgs supports equals form for --review-plan=none", () => {
   expect(opts.reviewPlan).toBe("none");
 });
 
+test("parseArgs supports run id resume flags", () => {
+  const spaced = parseArgs(["--run-id", "19", "--proof", "verify"]);
+  const equals = parseArgs(["--run-id=21", "--proof", "verify"]);
+
+  expect(spaced.resumeRunId).toBe("19");
+  expect(equals.resumeRunId).toBe("21");
+});
+
+test("parseArgs keeps run id resume separate from agent session resume", () => {
+  const opts = parseArgs([
+    "--run-id",
+    "31",
+    "--session",
+    "claude-session",
+    "--proof",
+    "verify",
+  ]);
+
+  expect(opts.resumeRunId).toBe("31");
+  expect(opts.sessionId).toBe("claude-session");
+});
+
 test("parseArgs sets agent/review/reviewPlan to claude with --claude-only", () => {
   const opts = parseArgs(["--claude-only", "--proof", "verify"]);
 
@@ -211,12 +239,45 @@ test("parseArgs throws on conflicting --claude-only and --codex-only", () => {
   );
 });
 
-test("parseArgs allows explicit review-plan override after only-mode", () => {
-  const opts = parseArgs(["--codex-only", "--review-plan", "none"]);
+test("parseArgs keeps only-mode authoritative while honoring --review-plan none", () => {
+  const opts = parseArgs([
+    "--codex-only",
+    "--agent",
+    "claude",
+    "--review",
+    "claude",
+    "--review-plan",
+    "other",
+    "--review-plan",
+    "none",
+    "--proof",
+    "x",
+  ]);
 
   expect(opts.agent).toBe("codex");
   expect(opts.review).toBe("codex");
   expect(opts.reviewPlan).toBe("none");
+});
+
+test("parseArgs preserves explicit --review-plan none when only-mode comes later", () => {
+  const opts = parseArgs([
+    "--review-plan=none",
+    "--codex-only",
+    "--proof",
+    "x",
+  ]);
+
+  expect(opts.agent).toBe("codex");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("none");
+});
+
+test("parseArgs ignores later --agent after only-mode", () => {
+  const opts = parseArgs(["--codex-only", "--agent", "claude", "--proof", "x"]);
+
+  expect(opts.agent).toBe("codex");
+  expect(opts.review).toBe("codex");
+  expect(opts.reviewPlan).toBe("codex");
 });
 
 test("parseArgs accepts --codex-only with both --codex-model flag forms", () => {
@@ -285,14 +346,6 @@ test("parseArgs rejects missing model values when another flag follows", () => {
   expect(() =>
     parseArgs(["--claude-reviewer-model", "--proof", "verify"])
   ).toThrow("Missing value for --claude-reviewer-model");
-});
-
-test("parseArgs lets --agent override only agent after only-mode", () => {
-  const opts = parseArgs(["--codex-only", "--agent", "claude", "--proof", "x"]);
-
-  expect(opts.agent).toBe("claude");
-  expect(opts.review).toBe("codex");
-  expect(opts.reviewPlan).toBe("codex");
 });
 
 test("parseArgs rejects invalid --review-plan value", () => {

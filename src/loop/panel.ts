@@ -4,10 +4,11 @@ import {
   existsSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   statSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { file, spawn } from "bun";
 
 type Agent = "claude" | "codex";
@@ -39,14 +40,27 @@ interface DoneRow {
 }
 
 interface Snapshot {
+  loopRuns: LoopRunEntry[];
   rows: Row[];
   tmuxRows: TmuxRow[];
   warning?: string;
 }
 
+interface LoopRunEntry {
+  claudeSessionId: string;
+  codexThreadId: string;
+  cwd: string;
+  mode: string;
+  pid: number;
+  repoId: string;
+  runId: string;
+  status: string;
+  updatedAtMs: number;
+}
+
 interface TmuxRow {
   attached: boolean;
-  id: number;
+  id: string;
   session: string;
 }
 
@@ -58,10 +72,12 @@ interface ClaudeCache {
 const HOME = process.env.HOME ?? "";
 const CLAUDE_DEBUG_DIR = join(HOME, ".claude", "debug");
 const CLAUDE_PROJECTS_DIR = join(HOME, ".claude", "projects");
+const LOOP_RUNS_DIR = join(HOME, ".loop", "runs");
 const CODEX_SESSIONS_DIR = join(HOME, ".codex", "sessions");
 const REFRESH_MS = 1000;
 const ACTIVE_MS = 15_000;
 const DONE_LIMIT = 30;
+const LOOP_RUN_LIMIT = 30;
 const SESSION_FILE_MARKER = `${join(HOME, ".codex", "sessions")}/`;
 const FILE_CHUNK_BYTES = 8192;
 const NEWLINE_RE = /\r?\n/;
@@ -69,7 +85,8 @@ const PS_ROW_RE = /^\s*(\d+)\s+(\d+)\s+(.+)$/;
 const TOKEN_RE = /\s+/;
 const TRAILING_CR_RE = /\r$/;
 const TRAILING_LINE_BREAKS_RE = /[\r\n]+$/g;
-const LOOP_SESSION_RE = /-loop-(\d+)$/;
+const LOOP_SESSION_RE = /-loop-([A-Za-z0-9][A-Za-z0-9_-]*)$/;
+const TMUX_ID_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
 const isNodeOrBunToken = (token: string): boolean =>
   token === "node" ||
@@ -223,11 +240,14 @@ const parseTmuxSessions = (text: string): TmuxRow[] => {
     }
     rows.push({
       attached: attachedRaw.trim() === "1",
-      id: Number(match[1]),
+      id: match[1],
       session,
     });
   }
-  rows.sort((a, b) => a.id - b.id || a.session.localeCompare(b.session));
+  rows.sort(
+    (a, b) =>
+      TMUX_ID_COLLATOR.compare(a.id, b.id) || a.session.localeCompare(b.session)
+  );
   return rows;
 };
 
@@ -348,6 +368,28 @@ const stateFrom = (iso: string): string => {
     return "unknown";
   }
   return Date.now() - ts <= ACTIVE_MS ? "active" : "idle";
+};
+
+const numberFrom = (
+  obj: Record<string, unknown> | undefined,
+  key: string
+): number => {
+  const value = obj?.[key];
+  let parsed = Number.NaN;
+  if (typeof value === "number") {
+    parsed = value;
+  } else if (typeof value === "string") {
+    parsed = Number.parseInt(value, 10);
+  }
+  return Number.isInteger(parsed) ? parsed : -1;
+};
+
+const timestampFrom = (
+  obj: Record<string, unknown> | undefined,
+  key: string
+): number => {
+  const ts = parseTimestampMs(str(obj, key));
+  return Number.isFinite(ts) ? ts : Number.NaN;
 };
 
 const clamp = (text: string, width: number): string =>
@@ -490,6 +532,63 @@ const readLastLine = (path: string): string => {
   } catch {
     return "";
   }
+};
+
+const readJson = (path: string): Record<string, unknown> | undefined => {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const loopRunPath = (path: string): { repoId: string; runId: string } => {
+  const runDir = dirname(path);
+  const repoDir = dirname(runDir);
+  return {
+    repoId: basename(repoDir) || "loop",
+    runId: basename(runDir) || "-",
+  };
+};
+
+const parseLoopRunManifest = (path: string): LoopRunEntry | undefined => {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+
+  const manifest = readJson(path);
+  if (!manifest) {
+    return undefined;
+  }
+
+  const ids = loopRunPath(path);
+  const updatedAtMs =
+    timestampFrom(manifest, "updatedAt") ||
+    timestampFrom(manifest, "updated_at") ||
+    timestampFrom(manifest, "createdAt") ||
+    timestampFrom(manifest, "created_at") ||
+    fileTimestampMs(path);
+
+  return {
+    claudeSessionId:
+      str(manifest, "claudeSessionId") ||
+      str(manifest, "claude_session_id") ||
+      "-",
+    codexThreadId:
+      str(manifest, "codexThreadId") || str(manifest, "codex_thread_id") || "-",
+    cwd: str(manifest, "cwd") || "-",
+    mode: str(manifest, "mode") || "paired",
+    pid: numberFrom(manifest, "pid"),
+    repoId: str(manifest, "repoId") || str(manifest, "repo_id") || ids.repoId,
+    runId: str(manifest, "runId") || str(manifest, "run_id") || ids.runId,
+    status: str(manifest, "status") || "unknown",
+    updatedAtMs: Number.isFinite(updatedAtMs)
+      ? updatedAtMs
+      : fileTimestampMs(path),
+  };
 };
 
 const codexRow = (pid: number, lsof: LsofSnapshot): Row => {
@@ -714,6 +813,7 @@ const claudeRow = async (
 };
 
 const collectSnapshot = async (cache: ClaudeCache): Promise<Snapshot> => {
+  const loopRuns = collectLoopRuns(LOOP_RUNS_DIR);
   const tmuxRows = parseTmuxSessions(
     await run(
       ["tmux", "list-sessions", "-F", "#{session_name}\t#{session_attached}"],
@@ -724,6 +824,7 @@ const collectSnapshot = async (cache: ClaudeCache): Promise<Snapshot> => {
   if (!ps.trim()) {
     return {
       rows: [],
+      loopRuns,
       tmuxRows,
       warning: "Could not read process table.",
     };
@@ -765,6 +866,7 @@ const collectSnapshot = async (cache: ClaudeCache): Promise<Snapshot> => {
   );
   return {
     rows,
+    loopRuns,
     tmuxRows,
     warning:
       failures > 0 ? `Failed to inspect ${failures} process(es).` : undefined,
@@ -889,6 +991,25 @@ const parseClaudeHistoryRow = (path: string): DoneRow | undefined => {
 const newestFirst = (paths: string[]): string[] =>
   [...paths].sort((a, b) => fileTimestampMs(b) - fileTimestampMs(a));
 
+const collectLoopRuns = (root: string): LoopRunEntry[] => {
+  if (!existsSync(root)) {
+    return [];
+  }
+
+  const runs = newestFirst(listFiles(root, "manifest.json"))
+    .slice(0, LOOP_RUN_LIMIT)
+    .map(parseLoopRunManifest)
+    .filter((run): run is LoopRunEntry => Boolean(run));
+
+  runs.sort(
+    (a, b) =>
+      b.updatedAtMs - a.updatedAtMs ||
+      a.repoId.localeCompare(b.repoId) ||
+      a.runId.localeCompare(b.runId)
+  );
+  return runs.slice(0, LOOP_RUN_LIMIT);
+};
+
 const seedDoneRows = (): DoneRow[] => {
   const codexPaths = newestFirst(listFiles(CODEX_SESSIONS_DIR, ".jsonl")).slice(
     0,
@@ -924,6 +1045,8 @@ const seedDoneRows = (): DoneRow[] => {
   }
   return [...unique.values()];
 };
+
+const seedLoopRuns = (): LoopRunEntry[] => collectLoopRuns(LOOP_RUNS_DIR);
 
 const reconcileDoneRows = (
   previousRows: Row[],
@@ -971,6 +1094,19 @@ const stackedDoneLines = (entry: DoneRow, width: number): string[] => {
     `session: ${trimText(entry.row.session, Math.max(1, available - 9))}`,
     `cwd: ${trimText(entry.row.cwd, Math.max(1, available - 5))}`,
     `final: ${trimText(entry.row.event, Math.max(1, available - 7))}`,
+  ];
+};
+
+const stackedLoopRunLines = (entry: LoopRunEntry, width: number): string[] => {
+  const available = Math.max(20, width);
+  return [
+    trimText(
+      `${entry.repoId}/${entry.runId} pid=${pidText(entry.pid)} status=${entry.status} mode=${entry.mode} updated=${ageFromMs(entry.updatedAtMs)}`,
+      available
+    ),
+    `claude: ${trimText(entry.claudeSessionId, Math.max(1, available - 8))}`,
+    `codex: ${trimText(entry.codexThreadId, Math.max(1, available - 7))}`,
+    `cwd: ${trimText(entry.cwd, Math.max(1, available - 5))}`,
   ];
 };
 
@@ -1031,6 +1167,14 @@ const buildLines = (
     lines.push(`[loop] ${snapshot.warning}`);
   }
   pushTmuxSection(lines, snapshot.tmuxRows, width);
+  pushStackedSection(
+    lines,
+    "[loop runs]",
+    snapshot.loopRuns,
+    "No loop-owned paired runs found.",
+    width,
+    stackedLoopRunLines
+  );
 
   const spec = tableSpec(width);
   if (!spec) {
@@ -1129,6 +1273,7 @@ export const runPanel = async (): Promise<void> => {
     sessionToProject: new Map(),
   };
   let previousRows: Row[] = [];
+  let previousLoopRuns: LoopRunEntry[] = seedLoopRuns();
   let doneRows: DoneRow[] = seedDoneRows();
   let stop = false;
   const onStop = (): void => {
@@ -1143,6 +1288,7 @@ export const runPanel = async (): Promise<void> => {
       let snapshot: Snapshot;
       try {
         snapshot = await collectSnapshot(cache);
+        previousLoopRuns = snapshot.loopRuns;
         doneRows = reconcileDoneRows(
           previousRows,
           snapshot.rows,
@@ -1153,6 +1299,7 @@ export const runPanel = async (): Promise<void> => {
       } catch (error) {
         snapshot = {
           rows: previousRows,
+          loopRuns: previousLoopRuns,
           tmuxRows: [],
           warning: `Panel refresh failed: ${errorText(error)}`,
         };
@@ -1171,6 +1318,7 @@ export const runPanel = async (): Promise<void> => {
 
 export const panelInternals = {
   buildLines,
+  collectLoopRuns,
   parseLsofSnapshot,
   parseProcessList,
   parseTmuxSessions,
@@ -1179,4 +1327,5 @@ export const panelInternals = {
   reconcileDoneRows,
   rowId,
   parseCodexHistoryRow,
+  parseLoopRunManifest,
 };

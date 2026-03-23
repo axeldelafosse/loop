@@ -15,11 +15,10 @@ const parseIterationCooldownMs = (): number => {
   }
   return parsed;
 };
-const ITERATION_COOLDOWN_MS = parseIterationCooldownMs();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const iterationCooldown = (i: number): Promise<void> =>
-  i > 1 ? sleep(ITERATION_COOLDOWN_MS) : Promise.resolve();
+  i > 1 ? sleep(parseIterationCooldownMs()) : Promise.resolve();
 
 const lastSession = (agent: Agent): string =>
   agent === "claude" ? getLastClaudeSessionId() : getLastCodexThreadId();

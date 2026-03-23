@@ -32,7 +32,8 @@ Options:
   --format <pretty|raw>                    Log format (default: pretty)
   --review [claude|codex|claudex]          Review on done (default: claudex)
   --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
-  --session <id>                           Resume from a previous session/thread ID
+  --run-id <id>                            Resume a previous paired loop run by run id
+  --session <id>                           Resume from a paired run id or raw session/thread ID
   --tmux                                   Run in a detached tmux session (name: repo-loop-X)
   --worktree                               Create and run in a fresh git worktree (name: repo-loop-X)
   -v, --version                            Show loop version
@@ -62,5 +63,6 @@ export const VALUE_FLAGS: Record<string, ValueFlag> = {
   "--codex-reviewer-model": "codexReviewerModel",
   "--claude-reviewer-model": "claudeReviewerModel",
   "--format": "format",
+  "--run-id": "runId",
   "--session": "session",
 };

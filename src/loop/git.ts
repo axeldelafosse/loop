@@ -7,6 +7,7 @@ export interface GitResult {
 }
 
 const SAFE_NAME_RE = /[^a-z0-9-]+/g;
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const MAIN_BRANCHES = new Set(["main", "master"]);
 
 export const decode = (value: Uint8Array | null | undefined): string =>
@@ -20,8 +21,16 @@ export const sanitizeBase = (value: string): string => {
   return cleaned || "loop";
 };
 
-export const buildLoopName = (base: string, index: number): string =>
-  `${base}-loop-${index}`;
+export const validateRunId = (runId: string | number): string => {
+  const value = `${runId}`.trim();
+  if (!(value && RUN_ID_RE.test(value))) {
+    throw new Error(`Invalid run id: ${runId}`);
+  }
+  return value;
+};
+
+export const buildLoopName = (base: string, runId: string | number): string =>
+  `${base}-loop-${validateRunId(runId)}`;
 
 export const runGit = (
   cwd: string,

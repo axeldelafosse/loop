@@ -4,6 +4,7 @@ import { runReviewerAgent } from "./runner";
 import type {
   Agent,
   Options,
+  ReviewFailure,
   ReviewMode,
   ReviewResult,
   RunResult,
@@ -167,6 +168,14 @@ const reasonFromFailureOutput = (
 const formatFailure = (reason: string): string =>
   `${reason} (${REVIEW_SIGNAL_HELP})`;
 
+const formatReviewNotes = (failures: ReviewFailure[]): string =>
+  failures
+    .map(
+      ({ reviewer, reason }) =>
+        `[${reviewer}] ${reason.trim() || REVIEW_FAILURE_FALLBACK}`
+    )
+    .join("\n\n");
+
 const formatUnknownError = (reason: unknown): string => {
   if (reason instanceof Error) {
     return reason.message || "unknown error";
@@ -207,18 +216,23 @@ type RunAgentFn = (
   prompt: string,
   opts: Options
 ) => Promise<RunResult>;
+type BuildPromptFn = (task: string, opts: Options, reviewer?: Agent) => string;
+
+const defaultBuildPrompt: BuildPromptFn = (task, opts) =>
+  buildReviewPrompt(task, opts.doneSignal, opts.proof);
 
 const runReviewWith = async (
+  buildPrompt: BuildPromptFn,
   run: RunAgentFn,
   reviewers: Agent[],
   task: string,
   opts: Options
 ): Promise<ReviewResult> => {
-  const prompt = buildReviewPrompt(task, opts.doneSignal, opts.proof);
   const orderedReviewers = [...new Set(reviewers)];
 
   const runOne = async (reviewer: Agent) => {
     console.log(`\n[loop] review with ${reviewer}`);
+    const prompt = buildPrompt(task, opts, reviewer);
     return { result: await run(reviewer, prompt, opts), reviewer };
   };
 
@@ -290,12 +304,13 @@ const runReviewWith = async (
     };
   };
 
-  const notes: string[] = [];
-  let failures = 0;
+  const failures: ReviewFailure[] = [];
 
   const addFailure = (reviewer: Agent, reason: string): void => {
-    failures += 1;
-    notes.push(`[${reviewer}] ${reason.trim() || REVIEW_FAILURE_FALLBACK}`);
+    failures.push({
+      reason: reason.trim() || REVIEW_FAILURE_FALLBACK,
+      reviewer,
+    });
   };
 
   const settled = await Promise.allSettled(
@@ -315,17 +330,27 @@ const runReviewWith = async (
   }
 
   return {
-    approved: failures === 0,
+    approved: failures.length === 0,
     consensusFail:
-      orderedReviewers.length > 1 && failures === orderedReviewers.length,
-    failureCount: failures,
-    notes: notes.join("\n\n"),
+      orderedReviewers.length > 1 &&
+      failures.length === orderedReviewers.length,
+    failureCount: failures.length,
+    failures,
+    notes: formatReviewNotes(failures),
   };
 };
 
 export const createRunReview = (run: RunAgentFn) => {
   return (reviewers: Agent[], task: string, opts: Options) =>
-    runReviewWith(run, reviewers, task, opts);
+    runReviewWith(defaultBuildPrompt, run, reviewers, task, opts);
+};
+
+export const createRunReviewWithPrompt = (
+  buildPrompt: BuildPromptFn,
+  run: RunAgentFn
+) => {
+  return (reviewers: Agent[], task: string, opts: Options) =>
+    runReviewWith(buildPrompt, run, reviewers, task, opts);
 };
 
 export const runReview = async (
@@ -333,4 +358,4 @@ export const runReview = async (
   task: string,
   opts: Options
 ): Promise<ReviewResult> =>
-  runReviewWith(runReviewerAgent, reviewers, task, opts);
+  runReviewWith(defaultBuildPrompt, runReviewerAgent, reviewers, task, opts);

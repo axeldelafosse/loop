@@ -1,24 +1,29 @@
 import { existsSync } from "node:fs";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  resolve as resolvePath,
-} from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawnSync } from "bun";
 import { buildLoopName, decode, runGit, sanitizeBase } from "./git";
+import { buildLaunchArgv } from "./launch";
+import { resolveExistingRunId } from "./run-state";
 
 export const TMUX_FLAG = "--tmux";
 export const TMUX_MISSING_ERROR =
   "Error: tmux is not installed. Install tmux with: brew install tmux";
 const WORKTREE_FLAG = "--worktree";
+const RUN_ID_FLAG = "--run-id";
+const SESSION_FLAG = "--session";
+const ONLY_MODE_FLAGS = ["--claude-only", "--codex-only"] as const;
 const RUN_BASE_ENV = "LOOP_RUN_BASE";
 const RUN_ID_ENV = "LOOP_RUN_ID";
 
 interface SpawnResult {
   exitCode: number;
   stderr: string;
+}
+
+interface GitResult {
+  exitCode: number;
+  stderr: string;
+  stdout: string;
 }
 
 interface TmuxDeps {
@@ -29,6 +34,7 @@ interface TmuxDeps {
   isInteractive: () => boolean;
   launchArgv: string[];
   log: (line: string) => void;
+  runGit: (cwd: string, args: string[]) => GitResult;
   spawn: (args: string[]) => SpawnResult;
 }
 
@@ -40,34 +46,147 @@ const buildShellCommand = (argv: string[]): string =>
 
 const stripTmuxFlag = (argv: string[]): string[] =>
   argv.filter((arg) => arg !== TMUX_FLAG);
-const isScriptPath = (path: string): boolean =>
-  path.endsWith(".ts") ||
-  path.endsWith(".tsx") ||
-  path.endsWith(".js") ||
-  path.endsWith(".mjs") ||
-  path.endsWith(".cjs");
-const isBunExecutable = (value: string): boolean => {
-  const file = basename(value);
-  return file === "bun" || file === "bun.exe";
+
+const parseToken = (argv: string[], flag: string): string | undefined => {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg.startsWith(`${flag}=`)) {
+      const value = arg.slice(flag.length + 1).trim();
+      if (value) {
+        return value;
+      }
+      throw new Error(`Invalid ${flag} value: cannot be empty`);
+    }
+    if (arg === flag) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error(`Missing value for ${flag}`);
+      }
+      const token = value.trim();
+      if (token) {
+        return token;
+      }
+      throw new Error(`Invalid ${flag} value: cannot be empty`);
+    }
+  }
+  return undefined;
+};
+
+const resolveRequestedRunId = (
+  argv: string[],
+  deps: TmuxDeps
+): string | undefined => {
+  const runId = parseToken(argv, RUN_ID_FLAG);
+  const singleAgentMode = ONLY_MODE_FLAGS.some((flag) => argv.includes(flag));
+  if (runId) {
+    if (singleAgentMode) {
+      return runId;
+    }
+    const resolved = (() => {
+      try {
+        return resolveExistingRunId(
+          runId,
+          deps.cwd,
+          deps.env.HOME ?? process.env.HOME ?? ""
+        );
+      } catch {
+        return undefined;
+      }
+    })();
+    if (!resolved) {
+      if (cwdMatchesRunId(deps.cwd, runId)) {
+        return runId;
+      }
+      throw new Error(`[loop] paired run "${runId}" does not exist`);
+    }
+    return resolved;
+  }
+
+  const sessionId = parseToken(argv, SESSION_FLAG);
+  if (!sessionId) {
+    return undefined;
+  }
+
+  if (singleAgentMode) {
+    return undefined;
+  }
+
+  const resolved = (() => {
+    try {
+      return resolveExistingRunId(
+        sessionId,
+        deps.cwd,
+        deps.env.HOME ?? process.env.HOME ?? ""
+      );
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!resolved) {
+    if (cwdMatchesRunId(deps.cwd, sessionId)) {
+      return sessionId;
+    }
+    return undefined;
+  }
+  return resolved;
+};
+
+const cwdMatchesRunId = (cwd: string, runId: string): boolean => {
+  const base = sanitizeBase(basename(cwd));
+  return base.endsWith(`-loop-${sanitizeBase(runId)}`);
 };
 
 const MAX_SESSION_ATTEMPTS = 10_000;
 const SESSION_CONFLICT_RE = /duplicate session|already exists/i;
 const NO_SESSION_RE = /no sessions|couldn't find session|session .* not found/i;
-const resolveRunBase = (cwd: string): string => {
-  try {
-    const repoRoot = runGit(cwd, ["rev-parse", "--show-toplevel"], "ignore");
-    if (repoRoot.exitCode === 0 && repoRoot.stdout) {
-      return sanitizeBase(basename(repoRoot.stdout));
+const LOOP_WORKTREE_SUFFIX_RE = /-loop-[a-z0-9][a-z0-9_-]*$/i;
+
+const stripLoopSuffix = (value: string): string =>
+  value.replace(LOOP_WORKTREE_SUFFIX_RE, "") || value;
+
+const resolveRunBase = (
+  cwd: string,
+  deps: TmuxDeps,
+  requestedId?: string
+): string => {
+  const gitResult = (args: string[]): GitResult | undefined => {
+    try {
+      return deps.runGit(cwd, args);
+    } catch {
+      return undefined;
     }
-  } catch {
-    return sanitizeBase(basename(cwd));
+  };
+
+  const commonDir = gitResult([
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]);
+  if (commonDir?.exitCode === 0 && commonDir.stdout) {
+    return sanitizeBase(basename(dirname(commonDir.stdout)));
   }
-  return sanitizeBase(basename(cwd));
+
+  const topLevel = gitResult([
+    "rev-parse",
+    "--path-format=absolute",
+    "--show-toplevel",
+  ]);
+  if (topLevel?.exitCode === 0 && topLevel.stdout) {
+    return sanitizeBase(basename(topLevel.stdout));
+  }
+
+  const base = sanitizeBase(basename(cwd));
+  if (requestedId) {
+    const requestedSuffix = `-loop-${sanitizeBase(requestedId)}`;
+    if (base.endsWith(requestedSuffix)) {
+      return stripLoopSuffix(base.slice(0, -requestedSuffix.length));
+    }
+  }
+  return stripLoopSuffix(base);
 };
 
-const buildRunName = (base: string, index: number): string =>
-  buildLoopName(base, index);
+const buildRunName = (base: string, runId: string | number): string =>
+  buildLoopName(base, runId);
 
 const worktreeAvailable = (cwd: string, runName: string): boolean => {
   const repoRoot = (() => {
@@ -168,30 +287,78 @@ const buildSessionCommand = (
   ]);
 };
 
-const buildLaunchArgv = (
-  processArgv: string[] = process.argv,
-  execPath: string = process.execPath
-): string[] => {
-  const scriptArg = processArgv[1];
-  const commandPath = processArgv[0];
-  if (
-    !scriptArg ||
-    scriptArg.startsWith("-") ||
-    scriptArg.startsWith("/$bunfs/")
-  ) {
-    if (
-      !(commandPath && isAbsolute(commandPath)) ||
-      isBunExecutable(commandPath)
-    ) {
-      return [execPath];
+const startRequestedSession = (
+  deps: TmuxDeps,
+  runBase: string,
+  requestedId: string,
+  forwardedArgv: string[]
+): string => {
+  const candidate = buildRunName(runBase, requestedId);
+  const existingSession = sessionExists(candidate, deps.spawn);
+  if (existingSession) {
+    return candidate;
+  }
+
+  const command = buildSessionCommand(
+    deps,
+    [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${requestedId}`],
+    forwardedArgv
+  );
+  const result = deps.spawn([
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    candidate,
+    "-c",
+    deps.cwd,
+    command,
+  ]);
+  if (result.exitCode === 0) {
+    return candidate;
+  }
+
+  const suffix = result.stderr ? `: ${result.stderr}` : ".";
+  throw new Error(`Failed to start tmux session${suffix}`);
+};
+
+const startAutoSession = (
+  deps: TmuxDeps,
+  runBase: string,
+  forwardedArgv: string[],
+  needsWorktree: boolean
+): string => {
+  for (let index = 1; index <= MAX_SESSION_ATTEMPTS; index += 1) {
+    const candidate = buildRunName(runBase, index);
+    if (needsWorktree && !worktreeAvailable(deps.cwd, candidate)) {
+      continue;
     }
-    return [commandPath];
+
+    const command = buildSessionCommand(
+      deps,
+      [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${index}`],
+      forwardedArgv
+    );
+    const result = deps.spawn([
+      "tmux",
+      "new-session",
+      "-d",
+      "-s",
+      candidate,
+      "-c",
+      deps.cwd,
+      command,
+    ]);
+    if (result.exitCode === 0) {
+      return candidate;
+    }
+    if (!isSessionConflict(result.stderr)) {
+      const suffix = result.stderr ? `: ${result.stderr}` : ".";
+      throw new Error(`Failed to start tmux session${suffix}`);
+    }
   }
-  const scriptPath = isAbsolute(scriptArg) ? scriptArg : resolvePath(scriptArg);
-  if (isBunExecutable(execPath) || isScriptPath(scriptPath)) {
-    return [execPath, scriptPath];
-  }
-  return commandPath ? [commandPath] : [execPath];
+
+  return "";
 };
 
 const defaultDeps = (): TmuxDeps => ({
@@ -213,6 +380,7 @@ const defaultDeps = (): TmuxDeps => ({
   log: (line: string) => {
     console.log(line);
   },
+  runGit: (cwd: string, args: string[]) => runGit(cwd, args),
   spawn: (args: string[]) => {
     const result = spawnSync(args, { stderr: "pipe" });
     return { exitCode: result.exitCode, stderr: decode(result.stderr) };
@@ -221,42 +389,15 @@ const defaultDeps = (): TmuxDeps => ({
 
 const findSession = (argv: string[], deps: TmuxDeps): string => {
   const forwardedArgv = stripTmuxFlag(argv);
-  const runBase = resolveRunBase(deps.cwd);
+  const requestedId = resolveRequestedRunId(argv, deps);
+  const runBase = resolveRunBase(deps.cwd, deps, requestedId);
   const needsWorktree = argv.includes(WORKTREE_FLAG);
 
-  for (let index = 1; index <= MAX_SESSION_ATTEMPTS; index++) {
-    const candidate = buildRunName(runBase, index);
-    if (needsWorktree && !worktreeAvailable(deps.cwd, candidate)) {
-      continue;
-    }
-
-    const command = buildSessionCommand(
-      deps,
-      [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${index}`],
-      forwardedArgv
-    );
-    const result = deps.spawn([
-      "tmux",
-      "new-session",
-      "-d",
-      "-s",
-      candidate,
-      "-c",
-      deps.cwd,
-      command,
-    ]);
-
-    if (result.exitCode === 0) {
-      return candidate;
-    }
-
-    if (!isSessionConflict(result.stderr)) {
-      const suffix = result.stderr ? `: ${result.stderr}` : ".";
-      throw new Error(`Failed to start tmux session${suffix}`);
-    }
+  if (requestedId !== undefined) {
+    return startRequestedSession(deps, runBase, requestedId, forwardedArgv);
   }
 
-  return "";
+  return startAutoSession(deps, runBase, forwardedArgv, needsWorktree);
 };
 
 const attachSessionIfInteractive = (

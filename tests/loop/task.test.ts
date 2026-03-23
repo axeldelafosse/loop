@@ -21,16 +21,25 @@ afterEach(() => {
 
 interface TaskDeps {
   isFile?: (path: string) => boolean;
+  preparePairedOptions?: (
+    opts: Options,
+    cwd?: string,
+    createManifest?: boolean
+  ) => void;
   readPrompt?: (input: string) => Promise<string>;
   runAgent?: (
     agent: Options["agent"],
     prompt: string,
-    opts: Options
+    opts: Options,
+    sessionId?: string
   ) => Promise<RunResult>;
 }
 
 const loadResolveTask = async (deps: TaskDeps = {}) => {
   const isFileMock = mock(deps.isFile ?? (() => false));
+  const preparePairedOptionsMock = mock(
+    deps.preparePairedOptions ?? (() => undefined)
+  );
   const readPromptMock = mock(
     deps.readPrompt ?? (async (input: string) => input)
   );
@@ -49,13 +58,22 @@ const loadResolveTask = async (deps: TaskDeps = {}) => {
     readPrompt: readPromptMock,
     hasSignal: realUtils.hasSignal,
   }));
+  mock.module("../../src/loop/paired-options", () => ({
+    preparePairedOptions: preparePairedOptionsMock,
+  }));
   mock.module("../../src/loop/runner", () => ({
     runAgent: runAgentMock,
     runReviewerAgent: runAgentMock,
   }));
 
   const { resolveTask } = await import("../../src/loop/task");
-  return { isFileMock, readPromptMock, resolveTask, runAgentMock };
+  return {
+    isFileMock,
+    preparePairedOptionsMock,
+    readPromptMock,
+    resolveTask,
+    runAgentMock,
+  };
 };
 
 test("resolveTask throws when no prompt input and PLAN.md is missing", async () => {
@@ -148,6 +166,64 @@ test("resolveTask creates PLAN.md first for plain-text prompt input", async () =
     expect.any(Object)
   );
   expect(readPromptMock).toHaveBeenCalledWith("PLAN.md");
+});
+
+test("resolveTask prepares paired planning without creating a manifest", async () => {
+  const { preparePairedOptionsMock, resolveTask } = await loadResolveTask({
+    isFile: (path) => path === "PLAN.md",
+    readPrompt: async (input) =>
+      input === "PLAN.md" ? "generated plan task" : input,
+    runAgent: async () => ({
+      combined: "",
+      exitCode: 0,
+      parsed: "<done/>",
+    }),
+  });
+
+  await resolveTask(makeOptions("ship feature", { pairedMode: true }));
+
+  expect(preparePairedOptionsMock).toHaveBeenCalledWith(
+    expect.any(Object),
+    process.cwd(),
+    false
+  );
+});
+
+test("resolveTask primes paired planning sessions before agent turns", async () => {
+  const { preparePairedOptionsMock, resolveTask, runAgentMock } =
+    await loadResolveTask({
+      isFile: (path) => path === "PLAN.md",
+      preparePairedOptions: (opts) => {
+        opts.pairedSessionIds = {
+          claude: "claude-session-1",
+          codex: "codex-thread-1",
+        };
+      },
+      readPrompt: async () => "generated plan task",
+      runAgent: async () => ({
+        combined: "",
+        exitCode: 0,
+        parsed: "",
+      }),
+    });
+
+  await resolveTask(makeOptions("ship feature", { pairedMode: true }));
+
+  expect(preparePairedOptionsMock).toHaveBeenCalledTimes(1);
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    1,
+    "codex",
+    expect.any(String),
+    expect.any(Object),
+    "codex-thread-1"
+  );
+  expect(runAgentMock).toHaveBeenNthCalledWith(
+    2,
+    "claude",
+    expect.any(String),
+    expect.any(Object),
+    "claude-session-1"
+  );
 });
 
 test("resolveTask reviews PLAN.md with other model by default in plain-text flow", async () => {

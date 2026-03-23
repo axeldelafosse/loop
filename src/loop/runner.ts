@@ -1,11 +1,13 @@
 import { spawn } from "bun";
 import {
+  type ClaudeSdkLaunchOptions,
   hasClaudeSdkProcess,
   interruptClaudeSdk,
   runClaudeTurn,
   startClaudeSdk,
 } from "./claude-sdk-server";
 import {
+  type AppServerLaunchOptions,
   CODEX_TRANSPORT_ENV,
   CODEX_TRANSPORT_EXEC,
   CodexAppServerFallbackError,
@@ -26,6 +28,10 @@ type AgentRunKind = "review" | "work";
 interface SpawnConfig {
   args: string[];
   cmd: string;
+}
+export interface PersistentAgentSessionOptions {
+  claudeLaunch?: ClaudeSdkLaunchOptions;
+  codexLaunch?: AppServerLaunchOptions;
 }
 
 type LegacyAgentRunner = (
@@ -114,7 +120,8 @@ export const buildCommand = (
   agent: Agent,
   prompt: string,
   model: string,
-  sessionId?: string
+  sessionId?: string,
+  opts?: Options
 ): SpawnConfig => {
   if (agent === "claude") {
     const args = [
@@ -127,25 +134,31 @@ export const buildCommand = (
       "--model",
       model,
     ];
+    if (opts?.claudeMcpConfigPath) {
+      args.push(
+        "--mcp-config",
+        opts.claudeMcpConfigPath,
+        "--strict-mcp-config"
+      );
+    }
     if (sessionId) {
       args.push("--resume", sessionId);
     }
     return { args, cmd: "claude" };
   }
 
-  return {
-    args: [
-      "exec",
-      "--json",
-      "--model",
-      model,
-      "-c",
-      'model_reasoning_effort="xhigh"',
-      "--yolo",
-      prompt,
-    ],
-    cmd: "codex",
-  };
+  const args = [
+    "exec",
+    "--json",
+    "--model",
+    model,
+    "-c",
+    'model_reasoning_effort="xhigh"',
+    ...(opts?.codexMcpConfigArgs ?? []),
+    "--yolo",
+    prompt,
+  ];
+  return { args, cmd: "codex" };
 };
 
 const resolveModel = (
@@ -290,7 +303,10 @@ const runCodexAppServerAttempt = async (
   });
 
   try {
-    await startAppServer();
+    await startAppServer({
+      configValues: opts.codexMcpConfigArgs,
+      persistentThread: opts.pairedMode === true || Boolean(sessionId),
+    });
   } catch (error) {
     if (process.env[CODEX_TRANSPORT_ENV] === CODEX_TRANSPORT_EXEC) {
       throw error;
@@ -391,7 +407,8 @@ const runLegacyAgent = async (
     agent,
     prompt,
     resolveModel(agent, opts, kind),
-    sessionId
+    sessionId,
+    opts
   );
   const proc = spawn([cmd, ...args], {
     detached: DETACH_CHILD_PROCESS,
@@ -513,7 +530,14 @@ const runClaudeAgent = async (
   activeClaudeSdkRuns += 1;
   syncSignalHandlers();
   try {
-    await startClaudeSdk(model, sessionId);
+    if (opts.claudeMcpConfigPath || opts.claudePersistentSession) {
+      await startClaudeSdk(model, sessionId, {
+        mcpConfig: opts.claudeMcpConfigPath,
+        persistent: opts.claudePersistentSession,
+      });
+    } else {
+      await startClaudeSdk(model, sessionId);
+    }
     const result = await runClaudeTurn(prompt, opts, {
       onDelta,
       onParsed,
@@ -553,3 +577,30 @@ export const runReviewerAgent = (
   sessionId?: string
 ): Promise<RunResult> =>
   runAgentWithKind(agent, prompt, opts, sessionId, "review");
+
+export const startPersistentAgentSession = async (
+  agent: Agent,
+  opts: Options,
+  sessionId?: string,
+  sessionOptions: PersistentAgentSessionOptions = {},
+  kind: AgentRunKind = "work"
+): Promise<void> => {
+  if (agent === "codex") {
+    await startAppServer({
+      configValues:
+        sessionOptions.codexLaunch?.configValues ?? opts.codexMcpConfigArgs,
+      ...(sessionOptions.codexLaunch ?? {}),
+      persistentThread: true,
+      resumeThreadId: sessionId,
+      threadModel: resolveModel(agent, opts, kind),
+    });
+    return;
+  }
+
+  await startClaudeSdk(resolveModel(agent, opts, kind), sessionId, {
+    mcpConfig:
+      sessionOptions.claudeLaunch?.mcpConfig ?? opts.claudeMcpConfigPath,
+    ...(sessionOptions.claudeLaunch ?? {}),
+    persistent: true,
+  });
+};

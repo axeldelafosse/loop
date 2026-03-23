@@ -8,9 +8,22 @@ const makeOptions = (): Options => ({
   format: "pretty",
   maxIterations: 2,
   codexModel: "test-model",
+  pairedMode: true,
   review: "claudex",
   tmux: false,
   worktree: false,
+});
+
+const makeOnlyOptions = (
+  agent: Options["agent"],
+  overrides: Partial<Options> = {}
+): Options => ({
+  ...makeOptions(),
+  agent,
+  pairedMode: false,
+  review: agent,
+  reviewPlan: agent,
+  ...overrides,
 });
 
 afterEach(() => {
@@ -137,6 +150,7 @@ test("runCli runs task flow when argv has options", async () => {
   expect(parseArgsMock).toHaveBeenCalledWith(["--proof", "verify with tests"]);
   expect(resolveTaskMock).toHaveBeenCalledWith(opts);
   expect(runLoopMock).toHaveBeenCalledWith("ship feature", opts);
+  expect(opts.pairedMode).toBe(true);
 });
 
 test("runCli delegates to tmux and skips task flow when tmux run starts", async () => {
@@ -261,6 +275,82 @@ test("runCli creates worktree before resolving task when --worktree is set", asy
   expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
   expect(calls).toEqual(["worktree", "resolve"]);
   expect(runLoopMock).toHaveBeenCalledWith("ship feature", opts);
+});
+
+test("runCli keeps claude-only task flow intact", async () => {
+  const opts = makeOnlyOptions("claude", { sessionId: "run-123" });
+  const {
+    maybeEnterWorktreeMock,
+    parseArgsMock,
+    resolveTaskMock,
+    runCli,
+    runInTmuxMock,
+    runLoopMock,
+    runPanelMock,
+  } = await loadRunCli({
+    parseArgs: () => opts,
+    resolveTask: async () => "ship feature",
+  });
+
+  await runCli(["--claude-only", "--session", "run-123", "--proof", "verify"]);
+
+  expect(runPanelMock).not.toHaveBeenCalled();
+  expect(runInTmuxMock).not.toHaveBeenCalled();
+  expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
+  expect(parseArgsMock).toHaveBeenCalledWith([
+    "--claude-only",
+    "--session",
+    "run-123",
+    "--proof",
+    "verify",
+  ]);
+  expect(resolveTaskMock).toHaveBeenCalledWith(opts);
+  expect(runLoopMock).toHaveBeenCalledWith("ship feature", opts);
+  expect(opts.pairedMode).toBe(false);
+});
+
+test("runCli keeps codex-only tmux flow intact", async () => {
+  const opts = makeOnlyOptions("codex", {
+    sessionId: "resume-run",
+    tmux: true,
+    worktree: true,
+  });
+  const {
+    maybeEnterWorktreeMock,
+    runCli,
+    runInTmuxMock,
+    resolveTaskMock,
+    runLoopMock,
+    runPanelMock,
+  } = await loadRunCli({
+    parseArgs: () => opts,
+    runInTmux: () => true,
+  });
+
+  await runCli([
+    "--codex-only",
+    "--tmux",
+    "--worktree",
+    "--session",
+    "resume-run",
+    "--proof",
+    "verify",
+  ]);
+
+  expect(runPanelMock).not.toHaveBeenCalled();
+  expect(runInTmuxMock).toHaveBeenCalledWith([
+    "--codex-only",
+    "--tmux",
+    "--worktree",
+    "--session",
+    "resume-run",
+    "--proof",
+    "verify",
+  ]);
+  expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
+  expect(resolveTaskMock).not.toHaveBeenCalled();
+  expect(runLoopMock).not.toHaveBeenCalled();
+  expect(opts.pairedMode).toBe(false);
 });
 
 test("runCli calls update hooks in correct order before task flow", async () => {

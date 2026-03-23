@@ -1,12 +1,28 @@
 #!/usr/bin/env bun
+import { BRIDGE_SUBCOMMAND, runBridgeMcpServer } from "./loop/bridge";
 import { closeClaudeSdk } from "./loop/claude-sdk-server";
 import { closeAppServer } from "./loop/codex-app-server";
 import { cliDeps } from "./loop/deps";
+import type { Agent } from "./loop/types";
 import { updateDeps } from "./loop/update-deps";
 
 const TMUX_DETACH_HINT = "[loop] detach with Ctrl-b d";
 
+const parseBridgeArgs = (argv: string[]): { runDir: string; source: Agent } => {
+  const [runDir, source] = argv;
+  if (!runDir || (source !== "claude" && source !== "codex")) {
+    throw new Error("Usage: loop __bridge-mcp <run-dir> <claude|codex>");
+  }
+  return { runDir, source };
+};
+
 export const runCli = async (argv: string[]): Promise<void> => {
+  if (argv[0] === BRIDGE_SUBCOMMAND) {
+    const { runDir, source } = parseBridgeArgs(argv.slice(1));
+    await runBridgeMcpServer(runDir, source);
+    return;
+  }
+
   try {
     await updateDeps.applyStagedUpdateOnStartup();
     if (await updateDeps.handleManualUpdateCommand(argv)) {

@@ -82,7 +82,11 @@ const runClaudeTurn: MockFn<
   ) => Promise<RunResult>
 > = mock(async () => makeResult());
 const startClaudeSdk: MockFn<
-  (model?: string, sessionId?: string) => Promise<void>
+  (
+    model?: string,
+    sessionId?: string,
+    launchOptions?: { mcpConfig?: string; persistent?: boolean }
+  ) => Promise<void>
 > = mock(async () => undefined);
 let runAgent: (
   agent: string,
@@ -94,12 +98,32 @@ let runReviewerAgent: (
   prompt: string,
   opts: Options
 ) => Promise<RunResult>;
+let startPersistentAgentSession: (
+  agent: string,
+  opts: Options,
+  sessionId?: string,
+  sessionOptions?: {
+    claudeLaunch?: { mcpConfig?: string; persistent?: boolean };
+    codexLaunch?: {
+      configValues?: string[];
+      persistentThread?: boolean;
+      resumeThreadId?: string;
+      threadModel?: string;
+    };
+  },
+  kind?: "review" | "work"
+) => Promise<void>;
 let buildCommand: (
   agent: string,
   prompt: string,
   model: string
 ) => { args: string[]; cmd: string };
-const startAppServer: MockFn<() => Promise<void>> = mock(async () => undefined);
+const startAppServer: MockFn<
+  (launchOptions?: {
+    configValues?: string[];
+    persistentThread?: boolean;
+  }) => Promise<void>
+> = mock(async () => undefined);
 const useAppServer: MockFn<() => boolean> = mock(
   () => process.env[CODEX_TRANSPORT_ENV] !== CODEX_TRANSPORT_EXEC
 );
@@ -143,9 +167,13 @@ beforeEach(async () => {
   mock.restore();
   installCodexServerMock();
   installClaudeSdkMock();
-  ({ runAgent, runReviewerAgent, buildCommand, runnerInternals } = await import(
-    runnerImportPath
-  ));
+  ({
+    runAgent,
+    runReviewerAgent,
+    buildCommand,
+    runnerInternals,
+    startPersistentAgentSession,
+  } = await import(runnerImportPath));
   process.env[CODEX_TRANSPORT_ENV] = "";
   startAppServer.mockReset();
   startAppServer.mockResolvedValue(undefined);
@@ -179,13 +207,31 @@ afterAll(() => {
   mock.restore();
 });
 
-test("runAgent uses app-server transport by default", async () => {
+test("runAgent uses non-persistent app-server threads by default", async () => {
   const result = await runAgent("codex", "say hello", makeOptions());
 
   expect(result.exitCode).toBe(0);
   expect(startAppServer).toHaveBeenCalledTimes(1);
+  expect(startAppServer.mock.calls[0]?.[0]).toMatchObject({
+    persistentThread: false,
+  });
   expect(runCodexTurn).toHaveBeenCalledTimes(1);
   expect(runnerInternals).toBeDefined();
+});
+
+test("runAgent keeps app-server threads persistent for explicit resume", async () => {
+  const result = await runAgent(
+    "codex",
+    "say hello",
+    makeOptions(),
+    "thread-1"
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(startAppServer).toHaveBeenCalledTimes(1);
+  expect(startAppServer.mock.calls[0]?.[0]).toMatchObject({
+    persistentThread: true,
+  });
 });
 
 test("buildCommand uses the provided Claude model", () => {
@@ -255,6 +301,53 @@ test("runReviewerAgent uses claude reviewer model for claude reviews", async () 
   );
 
   expect(startClaudeSdk).toHaveBeenCalledWith("claude-review", undefined);
+});
+
+test("startPersistentAgentSession enables persistent Claude sessions", async () => {
+  await startPersistentAgentSession(
+    "claude",
+    makeOptions({ claudeReviewerModel: "claude-review" }),
+    "session-1",
+    { claudeLaunch: { mcpConfig: "/tmp/bridge.json" } },
+    "review"
+  );
+
+  expect(startClaudeSdk).toHaveBeenCalledWith("claude-review", "session-1", {
+    mcpConfig: "/tmp/bridge.json",
+    persistent: true,
+  });
+});
+
+test("startPersistentAgentSession enables persistent Codex threads", async () => {
+  await startPersistentAgentSession("codex", makeOptions(), undefined, {
+    codexLaunch: { configValues: ['mcp_servers.bridge.command="/bin/echo"'] },
+  });
+
+  expect(startAppServer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      configValues: ['mcp_servers.bridge.command="/bin/echo"'],
+      persistentThread: true,
+      threadModel: "test-model",
+    })
+  );
+});
+
+test("startPersistentAgentSession resumes persistent Codex threads", async () => {
+  await startPersistentAgentSession(
+    "codex",
+    makeOptions(),
+    "thread-1",
+    undefined,
+    "review"
+  );
+
+  expect(startAppServer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      persistentThread: true,
+      resumeThreadId: "thread-1",
+      threadModel: "test-model",
+    })
+  );
 });
 
 test("runAgent inserts pretty-mode blank line after message completion", async () => {
@@ -382,6 +475,12 @@ test("runAgent retries once after an unexpected app-server exit", async () => {
     expect(result.exitCode).toBe(0);
     expect(result.parsed).toBe("final output");
     expect(startAppServer).toHaveBeenCalledTimes(2);
+    expect(startAppServer.mock.calls[0]?.[0]).toMatchObject({
+      persistentThread: false,
+    });
+    expect(startAppServer.mock.calls[1]?.[0]).toMatchObject({
+      persistentThread: false,
+    });
     expect(runCodexTurn).toHaveBeenCalledTimes(2);
     expect(runLegacyAgent).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledTimes(1);
