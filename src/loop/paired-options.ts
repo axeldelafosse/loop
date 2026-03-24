@@ -181,6 +181,8 @@ export const preparePairedRun = (
           mode: "paired",
           pid: process.pid,
           status: "running",
+          // Non-tmux resumes should not preserve a dead tmux routing hint.
+          tmuxSession: opts.tmux ? existing.tmuxSession : undefined,
         },
         new Date().toISOString()
       )

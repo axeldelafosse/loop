@@ -323,6 +323,40 @@ test("bridge MCP handles standard empty-list and ping requests through the CLI p
   rmSync(root, { recursive: true, force: true });
 });
 
+test("bridge MCP writes line-delimited JSON responses", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    encodeLine({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+      },
+    })
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  const line = result.stdout.trim();
+  expect(line.startsWith("{")).toBe(true);
+  expect(JSON.parse(line)).toMatchObject({
+    id: 1,
+    jsonrpc: "2.0",
+    result: expect.objectContaining({
+      capabilities: expect.any(Object),
+      protocolVersion: "2024-11-05",
+    }),
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("bridge MCP receive_messages returns and clears queued inbox items", async () => {
   const bridge = await loadBridge();
   const root = makeTempDir();
@@ -422,7 +456,7 @@ test("bridge delivers Claude replies directly to Codex when app-server state is 
   rmSync(root, { recursive: true, force: true });
 });
 
-test("bridge leaves tmux-bound Codex messages queued for proxy delivery", async () => {
+test("bridge falls back to direct Codex delivery when the stored tmux session is stale", async () => {
   const injectCodexMessage = mock(async () => true);
   const bridge = await loadBridge({ injectCodexMessage });
   const root = makeTempDir();
@@ -460,11 +494,13 @@ test("bridge leaves tmux-bound Codex messages queued for proxy delivery", async 
     message
   );
 
-  expect(delivered).toBe(false);
-  expect(injectCodexMessage).not.toHaveBeenCalled();
-  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([
-    expect.objectContaining({ id: "msg-2" }),
-  ]);
+  expect(delivered).toBe(true);
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "Please review the final state."
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
 
   rmSync(root, { recursive: true, force: true });
 });

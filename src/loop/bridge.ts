@@ -398,6 +398,9 @@ const flushClaudeChannelMessages = (runDir: string): void => {
   }
 };
 
+// This bridge is launched under the agent CLIs' stdio MCP hooks, but those
+// runtimes expect newline-delimited JSON here so async channel notifications can
+// be pushed without Content-Length framing.
 const writeJsonRpc = (payload: unknown): void => {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 };
@@ -476,7 +479,9 @@ const deliverCodexBridgeMessage = async (
   message: BridgeMessage
 ): Promise<boolean> => {
   const status = readBridgeStatus(runDir);
-  if (status.tmuxSession) {
+  // A stale tmux session entry should not block direct app-server delivery on a
+  // later non-tmux resume.
+  if (status.tmuxSession && tmuxSessionExists(status.tmuxSession)) {
     return false;
   }
   if (!(status.codexRemoteUrl && status.codexThreadId)) {
@@ -542,7 +547,12 @@ const formatDispatchResult = (
   if (delivered) {
     return `delivered ${entry.id} to ${target}`;
   }
-  if (target === "codex" && readBridgeStatus(runDir).tmuxSession) {
+  const status = readBridgeStatus(runDir);
+  if (
+    target === "codex" &&
+    status.tmuxSession &&
+    tmuxSessionExists(status.tmuxSession)
+  ) {
     return `accepted ${entry.id} for codex delivery`;
   }
   return `queued ${entry.id} for ${target}`;
