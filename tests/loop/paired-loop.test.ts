@@ -849,7 +849,13 @@ test("runPairedLoop preserves claudex reviewers in paired mode", async () => {
     expect(reviewPrompts[0]?.prompt).toContain(
       "keep the actionable notes in your review body before the final review signal"
     );
+    expect(reviewPrompts[0]?.prompt).toContain(
+      "concrete file paths, commands, and code locations that must change"
+    );
     expect(reviewPrompts[0]?.prompt).not.toContain("send_to_agent");
+    expect(reviewPrompts[1]?.prompt).toContain(
+      "concrete file paths, commands, and code locations that must change"
+    );
     expect(reviewPrompts[1]?.prompt).toContain(
       'send the actionable notes to Claude with "send_to_agent"'
     );
@@ -881,6 +887,9 @@ test("runPairedLoop keeps explicit same-agent review on that agent", async () =>
     expect(reviewPrompts[0]?.agent).toBe("codex");
     expect(reviewPrompts[0]?.prompt).toContain(
       "keep the actionable notes in your review body before the final review signal"
+    );
+    expect(reviewPrompts[0]?.prompt).toContain(
+      "concrete file paths, commands, and code locations that must change"
     );
     expect(reviewPrompts[0]?.prompt).not.toContain("send_to_agent");
   });

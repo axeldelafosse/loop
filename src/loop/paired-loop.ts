@@ -138,6 +138,7 @@ const reviewBridgePrompt = (
     reviewDeliveryGuidance(reviewer, opts),
     `If review is needed, end your response with exactly "<review>FAIL</review>" on the final non-empty line. Nothing may follow this line.`,
     `If the work is complete, end with exactly "<review>PASS</review>" on the final non-empty line. No extra content after this line.`,
+    "When reporting failures, include concrete file paths, commands, and code locations that must change.",
     reviewToolGuidance(reviewer, opts),
   ]
     .filter(Boolean)
