@@ -1,6 +1,6 @@
 # loop
 
-Dead-simple Bun CLI that runs `codex` and `claude` in a loop. Bare `loop` now starts the interactive paired tmux workspace by default, and `loop dashboard` opens the live panel. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
+Dead-simple Bun CLI that runs `codex` and `claude` in a loop. Uses `tmux` to run the interactive TUIs side-by-side. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
 
 Install:
 ```bash
@@ -8,6 +8,12 @@ curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh 
 ```
 
 Run:
+```bash
+loop
+```
+
+or
+
 ```bash
 loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --tmux
 ```
