@@ -1,7 +1,16 @@
 #!/usr/bin/env bun
-import { BRIDGE_SUBCOMMAND, runBridgeMcpServer } from "./loop/bridge";
+import {
+  BRIDGE_SUBCOMMAND,
+  BRIDGE_WORKER_SUBCOMMAND,
+  runBridgeMcpServer,
+  runBridgeWorker,
+} from "./loop/bridge";
 import { closeClaudeSdk } from "./loop/claude-sdk-server";
 import { closeAppServer } from "./loop/codex-app-server";
+import {
+  CODEX_TMUX_PROXY_SUBCOMMAND,
+  runCodexTmuxProxy,
+} from "./loop/codex-tmux-proxy";
 import { cliDeps } from "./loop/deps";
 import type { Agent } from "./loop/types";
 import { updateDeps } from "./loop/update-deps";
@@ -16,13 +25,49 @@ const parseBridgeArgs = (argv: string[]): { runDir: string; source: Agent } => {
   return { runDir, source };
 };
 
+const parseBridgeWorkerArgs = (argv: string[]): { runDir: string } => {
+  const [runDir] = argv;
+  if (!runDir) {
+    throw new Error("Usage: loop __bridge-worker <run-dir>");
+  }
+  return { runDir };
+};
+
+const parseCodexTmuxProxyArgs = (
+  argv: string[]
+): { port: number; remoteUrl: string; runDir: string; threadId: string } => {
+  const [runDir, remoteUrl, threadId, rawPort] = argv;
+  const port = Number.parseInt(rawPort ?? "", 10);
+  if (
+    !(runDir && remoteUrl && threadId && Number.isInteger(port) && port > 0)
+  ) {
+    throw new Error(
+      "Usage: loop __codex-tmux-proxy <run-dir> <remote-url> <thread-id> <port>"
+    );
+  }
+  return { port, remoteUrl, runDir, threadId };
+};
+
 export const runCli = async (argv: string[]): Promise<void> => {
   if (argv[0] === BRIDGE_SUBCOMMAND) {
     const { runDir, source } = parseBridgeArgs(argv.slice(1));
     await runBridgeMcpServer(runDir, source);
     return;
   }
+  if (argv[0] === BRIDGE_WORKER_SUBCOMMAND) {
+    const { runDir } = parseBridgeWorkerArgs(argv.slice(1));
+    await runBridgeWorker(runDir);
+    return;
+  }
+  if (argv[0] === CODEX_TMUX_PROXY_SUBCOMMAND) {
+    const { port, remoteUrl, runDir, threadId } = parseCodexTmuxProxyArgs(
+      argv.slice(1)
+    );
+    await runCodexTmuxProxy(runDir, remoteUrl, threadId, port);
+    return;
+  }
 
+  let shouldCloseAgents = true;
   try {
     await updateDeps.applyStagedUpdateOnStartup();
     if (await updateDeps.handleManualUpdateCommand(argv)) {
@@ -38,7 +83,8 @@ export const runCli = async (argv: string[]): Promise<void> => {
       return;
     }
     const opts = cliDeps.parseArgs(argv);
-    if (opts.tmux && cliDeps.runInTmux(argv)) {
+    if (opts.tmux && !opts.pairedMode && (await cliDeps.runInTmux(argv))) {
+      shouldCloseAgents = false;
       return;
     }
     const gitWarning = cliDeps.checkGitState();
@@ -47,9 +93,19 @@ export const runCli = async (argv: string[]): Promise<void> => {
     }
     await cliDeps.maybeEnterWorktree(opts);
     const task = await cliDeps.resolveTask(opts);
+    if (
+      opts.tmux &&
+      opts.pairedMode &&
+      (await cliDeps.runInTmux(argv, undefined, { opts, task }))
+    ) {
+      shouldCloseAgents = false;
+      return;
+    }
     await cliDeps.runLoop(task, opts);
   } finally {
-    await Promise.all([closeAppServer(), closeClaudeSdk()]);
+    if (shouldCloseAgents) {
+      await Promise.all([closeAppServer(), closeClaudeSdk()]);
+    }
   }
 };
 

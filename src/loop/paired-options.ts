@@ -10,6 +10,7 @@ import {
   resolveRunId,
   resolveRunStorage,
   resolveStorageRoot,
+  touchRunManifest,
   writeRunManifest,
 } from "./run-state";
 import type { Options, PairedSessionIds } from "./types";
@@ -17,6 +18,11 @@ import type { Options, PairedSessionIds } from "./types";
 export interface PreparedRunState {
   allowRawSessionFallback: boolean;
   manifest?: RunManifest;
+  storage: RunStorage;
+}
+
+export interface PreparedPairedRun {
+  manifest: RunManifest;
   storage: RunStorage;
 }
 
@@ -149,4 +155,45 @@ export const preparePairedOptions = (
   const { allowRawSessionFallback, manifest, storage } =
     resolvePreparedRunState(opts, cwd, createManifest);
   applyPairedOptions(opts, storage, manifest, allowRawSessionFallback);
+};
+
+export const preparePairedRun = (
+  opts: Options,
+  cwd = process.cwd()
+): PreparedPairedRun => {
+  const {
+    allowRawSessionFallback,
+    manifest: existing,
+    storage,
+  } = resolvePreparedRunState(opts, cwd);
+  applyPairedOptions(opts, storage, existing, allowRawSessionFallback);
+
+  const resumable = canResumePairedManifest(existing) ? existing : undefined;
+  const manifest = existing
+    ? touchRunManifest(
+        {
+          ...existing,
+          claudeSessionId:
+            resumable?.claudeSessionId || opts.pairedSessionIds?.claude || "",
+          codexThreadId:
+            resumable?.codexThreadId || opts.pairedSessionIds?.codex || "",
+          cwd,
+          mode: "paired",
+          pid: process.pid,
+          status: "running",
+        },
+        new Date().toISOString()
+      )
+    : createRunManifest({
+        claudeSessionId: opts.pairedSessionIds?.claude ?? "",
+        codexThreadId: opts.pairedSessionIds?.codex ?? "",
+        cwd,
+        mode: "paired",
+        pid: process.pid,
+        repoId: storage.repoId,
+        runId: storage.runId,
+        status: "running",
+      });
+  writeRunManifest(storage.manifestPath, manifest);
+  return { manifest, storage };
 };

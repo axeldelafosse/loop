@@ -30,6 +30,7 @@ export interface RunStorage {
 
 export interface RunManifest {
   claudeSessionId: string;
+  codexRemoteUrl?: string;
   codexThreadId: string;
   createdAt: string;
   cwd: string;
@@ -38,6 +39,7 @@ export interface RunManifest {
   repoId: string;
   runId: string;
   status: string;
+  tmuxSession?: string;
   updatedAt: string;
 }
 
@@ -62,6 +64,7 @@ interface RepoIdDeps {
 
 interface RunManifestInput {
   claudeSessionId?: string;
+  codexRemoteUrl?: string;
   codexThreadId?: string;
   createdAt?: string;
   cwd: string;
@@ -70,6 +73,7 @@ interface RunManifestInput {
   repoId: string;
   runId: string;
   status?: string;
+  tmuxSession?: string;
   updatedAt?: string;
 }
 
@@ -327,6 +331,7 @@ export const createRunManifest = (
   now = new Date().toISOString()
 ): RunManifest => ({
   claudeSessionId: input.claudeSessionId ?? "",
+  ...(input.codexRemoteUrl ? { codexRemoteUrl: input.codexRemoteUrl } : {}),
   codexThreadId: input.codexThreadId ?? "",
   createdAt: input.createdAt ?? now,
   cwd: input.cwd,
@@ -335,6 +340,7 @@ export const createRunManifest = (
   repoId: input.repoId,
   runId: validateRunId(input.runId),
   status: input.status ?? "active",
+  ...(input.tmuxSession ? { tmuxSession: input.tmuxSession } : {}),
   updatedAt: input.updatedAt ?? now,
 });
 
@@ -401,6 +407,14 @@ export const readRunManifest = (
     return {
       claudeSessionId:
         firstString(parsed, ["claudeSessionId", "claude_session_id"]) ?? "",
+      ...(firstString(parsed, ["codexRemoteUrl", "codex_remote_url"])
+        ? {
+            codexRemoteUrl: firstString(parsed, [
+              "codexRemoteUrl",
+              "codex_remote_url",
+            ]),
+          }
+        : {}),
       codexThreadId:
         firstString(parsed, ["codexThreadId", "codex_thread_id"]) ?? "",
       createdAt,
@@ -410,6 +424,11 @@ export const readRunManifest = (
       repoId,
       runId,
       status,
+      ...(firstString(parsed, ["tmuxSession", "tmux_session"])
+        ? {
+            tmuxSession: firstString(parsed, ["tmuxSession", "tmux_session"]),
+          }
+        : {}),
       updatedAt,
     };
   } catch {

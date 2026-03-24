@@ -35,7 +35,11 @@ interface CliModuleDeps {
   maybeEnterWorktree?: (opts: Options) => void | Promise<void>;
   parseArgs?: (argv: string[]) => Options;
   resolveTask?: (opts: Options) => Promise<string>;
-  runInTmux?: (argv: string[]) => boolean;
+  runInTmux?: (
+    argv: string[],
+    overrides?: unknown,
+    launch?: { opts: Options; task: string }
+  ) => boolean | Promise<boolean>;
   runLoop?: (task: string, opts: Options) => Promise<void>;
   runPanel?: () => Promise<void>;
 }
@@ -69,6 +73,14 @@ const loadRunCli = async (
   const startAutoCheckMock = mock(
     updateOverrides.startAutoUpdateCheck ?? (() => undefined)
   );
+  const closeAppServerMock = mock(async () => undefined);
+  const closeClaudeSdkMock = mock(async () => undefined);
+  const actualCodexAppServer = await import(
+    `../src/loop/codex-app-server?actual=${Date.now()}`
+  );
+  const actualClaudeSdk = await import(
+    `../src/loop/claude-sdk-server?actual=${Date.now()}`
+  );
 
   mock.module("../src/loop/deps", () => ({
     cliDeps: {
@@ -90,10 +102,22 @@ const loadRunCli = async (
     },
   }));
 
+  mock.module("../src/loop/codex-app-server", () => ({
+    ...actualCodexAppServer,
+    closeAppServer: closeAppServerMock,
+  }));
+
+  mock.module("../src/loop/claude-sdk-server", () => ({
+    ...actualClaudeSdk,
+    closeClaudeSdk: closeClaudeSdkMock,
+  }));
+
   const { runCli } = await import(`../src/cli?test=${Date.now()}`);
   return {
     applyStagedMock,
     checkGitStateMock,
+    closeAppServerMock,
+    closeClaudeSdkMock,
     handleManualMock,
     maybeEnterWorktreeMock,
     parseArgsMock,
@@ -130,6 +154,8 @@ test("runCli starts panel when argv is empty", async () => {
 test("runCli runs task flow when argv has options", async () => {
   const opts = makeOptions();
   const {
+    closeAppServerMock,
+    closeClaudeSdkMock,
     maybeEnterWorktreeMock,
     parseArgsMock,
     resolveTaskMock,
@@ -150,12 +176,16 @@ test("runCli runs task flow when argv has options", async () => {
   expect(parseArgsMock).toHaveBeenCalledWith(["--proof", "verify with tests"]);
   expect(resolveTaskMock).toHaveBeenCalledWith(opts);
   expect(runLoopMock).toHaveBeenCalledWith("ship feature", opts);
+  expect(closeAppServerMock).toHaveBeenCalledTimes(1);
+  expect(closeClaudeSdkMock).toHaveBeenCalledTimes(1);
   expect(opts.pairedMode).toBe(true);
 });
 
-test("runCli delegates to tmux and skips task flow when tmux run starts", async () => {
+test("runCli delegates paired tmux after resolving the task", async () => {
   const opts = { ...makeOptions(), tmux: true };
   const {
+    closeAppServerMock,
+    closeClaudeSdkMock,
     maybeEnterWorktreeMock,
     runCli,
     runInTmuxMock,
@@ -170,15 +200,17 @@ test("runCli delegates to tmux and skips task flow when tmux run starts", async 
 
   await runCli(["--tmux", "--proof", "verify with tests"]);
 
-  expect(runInTmuxMock).toHaveBeenCalledWith([
-    "--tmux",
-    "--proof",
-    "verify with tests",
-  ]);
-  expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
-  expect(resolveTaskMock).not.toHaveBeenCalled();
+  expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
+  expect(resolveTaskMock).toHaveBeenCalledWith(opts);
+  expect(runInTmuxMock).toHaveBeenCalledWith(
+    ["--tmux", "--proof", "verify with tests"],
+    undefined,
+    { opts, task: "ship feature" }
+  );
   expect(runLoopMock).not.toHaveBeenCalled();
   expect(runPanelMock).not.toHaveBeenCalled();
+  expect(closeAppServerMock).not.toHaveBeenCalled();
+  expect(closeClaudeSdkMock).not.toHaveBeenCalled();
 });
 
 test("runCli keeps normal flow when already in tmux session", async () => {
@@ -316,6 +348,8 @@ test("runCli keeps codex-only tmux flow intact", async () => {
     worktree: true,
   });
   const {
+    closeAppServerMock,
+    closeClaudeSdkMock,
     maybeEnterWorktreeMock,
     runCli,
     runInTmuxMock,
@@ -350,6 +384,8 @@ test("runCli keeps codex-only tmux flow intact", async () => {
   expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
   expect(resolveTaskMock).not.toHaveBeenCalled();
   expect(runLoopMock).not.toHaveBeenCalled();
+  expect(closeAppServerMock).not.toHaveBeenCalled();
+  expect(closeClaudeSdkMock).not.toHaveBeenCalled();
   expect(opts.pairedMode).toBe(false);
 });
 
