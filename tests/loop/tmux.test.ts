@@ -491,6 +491,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   );
   expect(primaryPrompt).toContain("create a draft PR");
   expect(primaryPrompt).toContain("ready signal");
+  expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
   expect(peerPrompt).toContain("Reviewer ready.");
@@ -505,6 +506,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain(
     "Wait for the human to provide the first task"
   );
+  expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
   expect(peerPrompt).toContain("Reviewer ready. No task yet.");
   expect(peerPrompt).toContain("wait for the human");

@@ -14,6 +14,7 @@ import { buildLoopName, decode, runGit, sanitizeBase } from "./git";
 import { buildLaunchArgv } from "./launch";
 import { preparePairedRun } from "./paired-options";
 import { DETACH_CHILD_PROCESS } from "./process";
+import { SPAWN_TEAM_WITH_WORKTREE_ISOLATION } from "./prompts";
 import {
   type RunManifest,
   type RunStorage,
@@ -165,6 +166,7 @@ const buildPrimaryPrompt = (task: string, opts: Options): string => {
     `Your peer is ${peer}. Do the initial pass yourself, then use "send_to_agent" when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
+  parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
   parts.push(pairedBridgeGuidance(opts.agent));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
@@ -197,6 +199,9 @@ const buildInteractivePrimaryPrompt = (opts: Options): string => {
     `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" when you want ${peer} to review work, answer questions, or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
+  parts.push(
+    `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Apply that once the human gives you a concrete task.`
+  );
   parts.push(pairedBridgeGuidance(opts.agent));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
