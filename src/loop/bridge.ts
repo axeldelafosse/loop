@@ -14,6 +14,8 @@ import { buildLaunchArgv } from "./launch";
 import {
   appendRunTranscriptEntry,
   buildTranscriptPath,
+  isActiveRunState,
+  parseRunLifecycleState,
   readRunManifest,
 } from "./run-state";
 import type { Agent } from "./types";
@@ -1020,7 +1022,8 @@ export const runBridgeMcpServer = async (
 export const runBridgeWorker = async (runDir: string): Promise<void> => {
   while (true) {
     const status = readBridgeStatus(runDir);
-    if (status.status !== "running") {
+    const state = parseRunLifecycleState(status.state);
+    if (!(state && isActiveRunState(state))) {
       return;
     }
     if (!(status.tmuxSession && tmuxSessionExists(status.tmuxSession))) {

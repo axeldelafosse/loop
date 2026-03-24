@@ -582,7 +582,6 @@ const updatePairedManifest = (
         cwd: deps.cwd,
         mode: "paired",
         pid: process.pid,
-        status: "running",
         tmuxSession: session,
       },
       new Date().toISOString()
