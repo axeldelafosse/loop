@@ -214,12 +214,6 @@ export const parseRunLifecycleState = (
   if (status === "done") {
     return "completed";
   }
-  if (status === "stopped") {
-    return "stopped";
-  }
-  if (status === "failed") {
-    return "failed";
-  }
   return undefined;
 };
 
@@ -628,10 +622,11 @@ const parseStatusTranscriptEntry = (
   at: string
 ): RunStatusTranscriptEntry | undefined => {
   const state = parseRunLifecycleState(asString(parsed.state));
+  const detail = asString(parsed.detail);
   return state
     ? {
         at,
-        detail: asString(parsed.detail),
+        ...(detail ? { detail } : {}),
         kind: "status",
         state,
       }
@@ -646,6 +641,7 @@ const parseReviewTranscriptEntry = (
     parsed.reviewer === "claude" || parsed.reviewer === "codex"
       ? parsed.reviewer
       : undefined;
+  const reason = asString(parsed.reason);
   const status =
     typeof parsed.status === "string" && isReviewStatus(parsed.status)
       ? parsed.status
@@ -656,7 +652,7 @@ const parseReviewTranscriptEntry = (
   return {
     at,
     kind: "review",
-    reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+    ...(reason ? { reason } : {}),
     reviewer,
     status,
   };
@@ -667,6 +663,7 @@ const parseResultTranscriptEntry = (
   at: string
 ): RunResultTranscriptEntry | undefined => {
   const result = asString(parsed.result);
+  const detail = asString(parsed.detail);
   if (
     !(
       result === "done-signal-detected" ||
@@ -679,7 +676,7 @@ const parseResultTranscriptEntry = (
   }
   return {
     at,
-    detail: asString(parsed.detail),
+    ...(detail ? { detail } : {}),
     kind: "result",
     result,
   };

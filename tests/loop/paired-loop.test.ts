@@ -87,7 +87,13 @@ let startPersistentAgentSessionImpl = (
   _sessionOptions?: unknown,
   _kind?: AgentRunKind
 ): Promise<void> => Promise.resolve(undefined);
+let readlineAnswers: string[] = [];
+let readlinePrompts: string[] = [];
 let importNonce = 0;
+const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(
+  process.stdin,
+  "isTTY"
+);
 
 const loadPairedLoop = (): Promise<PairedLoopModule> => {
   mock.restore();
@@ -124,6 +130,15 @@ const loadPairedLoop = (): Promise<PairedLoopModule> => {
           kind
         )
     ),
+  }));
+  mock.module("node:readline/promises", () => ({
+    createInterface: mock(() => ({
+      close: mock(() => undefined),
+      question: mock((prompt: string) => {
+        readlinePrompts.push(prompt);
+        return Promise.resolve(readlineAnswers.shift() ?? "");
+      }),
+    })),
   }));
   importNonce += 1;
   return import(
@@ -180,6 +195,13 @@ afterEach(() => {
     _sessionOptions?: unknown,
     _kind?: AgentRunKind
   ): Promise<void> => Promise.resolve(undefined);
+  readlineAnswers = [];
+  readlinePrompts = [];
+  if (stdinIsTTYDescriptor) {
+    Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdin, "isTTY");
+  }
 });
 
 test("runPairedLoop fails when --run-id does not resolve to an existing manifest", async () => {
@@ -529,6 +551,33 @@ test("runPairedLoop records structured lifecycle events when no bridge traffic o
   });
 });
 
+test("runPairedLoop does not mark a run completed when the draft PR step fails", async () => {
+  const module = await loadPairedLoop();
+
+  runAgentImpl = (_agent, prompt) => {
+    if (prompt.includes("Review this completed work")) {
+      return Promise.resolve(makeResult("<review>PASS</review>"));
+    }
+    if (prompt.includes("Create a draft GitHub pull request")) {
+      return Promise.resolve({ combined: "", exitCode: 1, parsed: "" });
+    }
+    return Promise.resolve(makeResult("<done/>"));
+  };
+
+  await withTempHome("4c", async (runDir) => {
+    await expect(
+      module.runPairedLoop("Ship feature", makeOptions({ review: "codex" }))
+    ).rejects.toThrow("draft PR codex exited with code 1");
+
+    const transcript = readFileSync(join(runDir, "transcript.jsonl"), "utf8");
+    expect(readRunManifest(join(runDir, "manifest.json"))?.status).toBe(
+      "failed"
+    );
+    expect(transcript).not.toContain('"state":"completed"');
+    expect(transcript).toContain('"state":"failed"');
+  });
+});
+
 test("runPairedLoop delivers forwarded bridge messages to the target agent", async () => {
   const module = await loadPairedLoop();
   const calls: Array<{ agent: Agent; prompt: string }> = [];
@@ -624,6 +673,54 @@ test("runPairedLoop keeps a failed bridge message queued until the next run", as
         .readBridgeEvents(runDir)
         .filter((event) => event.kind === "delivered")
     ).toHaveLength(1);
+  });
+});
+
+test("runPairedLoop restores a pending follow-up prompt on resume", async () => {
+  const module = await loadPairedLoop();
+  const workPrompts: string[] = [];
+  Object.defineProperty(process.stdin, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+  readlineAnswers = ["Add the missing edge-case test."];
+
+  runAgentImpl = (_agent, prompt) => {
+    workPrompts.push(prompt);
+    return Promise.resolve(makeResult("<done/>"));
+  };
+
+  await withTempHome("4d", async (runDir) => {
+    const storage = resolveRunStorage("4d", process.cwd());
+    writeRunManifest(
+      storage.manifestPath,
+      createRunManifest({
+        claudeSessionId: "claude-session-1",
+        codexThreadId: "codex-thread-1",
+        cwd: process.cwd(),
+        mode: "paired",
+        pid: 1234,
+        repoId: storage.repoId,
+        runId: "4d",
+        state: "input-required",
+      })
+    );
+
+    await module.runPairedLoop(
+      "Ship feature",
+      makeOptions({ resumeRunId: "4d" })
+    );
+
+    expect(readlinePrompts).toEqual([
+      "\n[loop] follow-up prompt (blank to exit): ",
+    ]);
+    expect(workPrompts).toHaveLength(1);
+    expect(workPrompts[0]).toContain(
+      "Follow-up:\nAdd the missing edge-case test."
+    );
+    expect(readFileSync(join(runDir, "transcript.jsonl"), "utf8")).toContain(
+      '"detail":"follow-up prompt received"'
+    );
   });
 });
 

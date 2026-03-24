@@ -371,6 +371,28 @@ test("transcript helpers parse structured status, review, and result entries", (
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("structured transcript entries round-trip without undefined optional fields", () => {
+  const dir = makeTempDir();
+  const transcriptPath = join(dir, "transcript.jsonl");
+  const entries = [
+    createRunStatusEntry("working", undefined, "2026-03-22T10:00:00.000Z"),
+    createRunReviewEntry(
+      "codex",
+      "pass",
+      undefined,
+      "2026-03-22T10:01:00.000Z"
+    ),
+    createRunResultEntry("stopped", undefined, "2026-03-22T10:02:00.000Z"),
+  ];
+
+  for (const entry of entries) {
+    appendRunTranscriptEntry(transcriptPath, entry);
+  }
+
+  expect(readRunTranscriptEntries(transcriptPath)).toEqual(entries);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("run ids are validated before storage paths are built", () => {
   expect(() => buildRunDir("/tmp", "repo", "../oops")).toThrow(
     "Invalid run id"

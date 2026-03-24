@@ -202,6 +202,21 @@ const transitionRunState = (
   appendTranscript(state, createRunStatusEntry(nextState, detail, now));
 };
 
+const promptForFollowUp = async (
+  state: PairedState,
+  task: string,
+  rl: ReturnType<typeof createInterface>
+): Promise<string | undefined> => {
+  const answer = (
+    await rl.question("\n[loop] follow-up prompt (blank to exit): ")
+  ).trim();
+  if (!answer) {
+    return undefined;
+  }
+  transitionRunState(state, "working", "follow-up prompt received");
+  return `${task}\n\nFollow-up:\n${answer}`;
+};
+
 const nextResumeId = (state: PairedState, agent: Agent): string | undefined => {
   if (state.usedResume[agent]) {
     return undefined;
@@ -347,8 +362,8 @@ const handleDoneSignal = async (
     state.options.agent
   );
   if (review.approved) {
-    transitionRunState(state, "completed", "review approved");
     await runDraftPrStep(task, state.options);
+    transitionRunState(state, "completed", "review approved");
     console.log(
       `\n[loop] ${doneText(state.options.doneSignal)} detected and review passed, stopping.`
     );
@@ -477,6 +492,19 @@ export const runPairedLoop = async (
 
   try {
     appendTranscript(state, createRunStatusEntry(state.manifest.state));
+    if (state.manifest.state === "input-required") {
+      if (!rl) {
+        console.log("[loop] follow-up prompt required; rerun interactively.");
+        finalState = "stopped";
+        return;
+      }
+      const nextTask = await promptForFollowUp(state, loopTask, rl);
+      if (!nextTask) {
+        finalState = "stopped";
+        return;
+      }
+      loopTask = nextTask;
+    }
     await startPair(state);
     while (true) {
       const done = await runIterations(loopTask, state, reviewers);
@@ -496,15 +524,12 @@ export const runPairedLoop = async (
       appendTranscript(state, createRunResultEntry("max-iterations-reached"));
       transitionRunState(state, "input-required", "awaiting follow-up prompt");
       console.log(`\n[loop] reached max iterations (${opts.maxIterations}).`);
-      const answer = await rl.question(
-        "\n[loop] follow-up prompt (blank to exit): "
-      );
-      if (!answer.trim()) {
+      const nextTask = await promptForFollowUp(state, loopTask, rl);
+      if (!nextTask) {
         finalState = "stopped";
         return;
       }
-      transitionRunState(state, "working", "follow-up prompt received");
-      loopTask = `${loopTask}\n\nFollow-up:\n${answer.trim()}`;
+      loopTask = nextTask;
     }
   } catch (error) {
     finalState = "failed";
