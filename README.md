@@ -12,6 +12,10 @@ Run:
 loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --tmux
 ```
 
+## Agent-to-agent pair programming
+
+One agent is the main worker, the other acts as a reviewer. They work together on a PLAN.md and iterate until they both agree the task is done. Then the main worker creates a draft PR.
+
 ## What this is
 
 This _is_ a "meta agent loop" to help coding agents become long-running agents. Stop baby sitting your agents: let them iterate on tasks with clear proof requirements until they are done. Run multiple reviews to continue the feedback loop.
@@ -24,7 +28,6 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 - Keeps Claude and Codex sessions persistent across iterations and bridges messages between them
 - Stores paired run state under `~/.loop/runs/...` so runs can be resumed by run id or session/thread id
 - Loops until the task is proven done, then runs reviews and creates a draft PR
-- Opens a live panel with active sessions, recent loop-owned runs, and tmux sessions when launched with no args
 
 ## Setup
 
