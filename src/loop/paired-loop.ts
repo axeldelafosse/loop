@@ -94,7 +94,7 @@ const bridgeGuidance = (agent: Agent): string => {
   return [
     "Paired mode:",
     `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want ${peer} to act, review, or answer.`,
-    'Do not ask the human to relay messages between agents. Use "bridge_status" if you need the current bridge state.',
+    'Do not ask the human to relay messages between agents or answer the human on the other agent\'s behalf. Use "bridge_status" if you need the current bridge state.',
     'If "bridge_status" shows pending messages addressed to you, call "receive_messages" to read them.',
   ].join("\n");
 };
@@ -148,7 +148,9 @@ const forwardBridgePrompt = (source: Agent, message: string): string =>
   [
     `Message from ${capitalize(source)} via the loop bridge:`,
     message.trim(),
-    "Treat this as direct agent-to-agent coordination. Reply with send_to_agent only when you have something useful for the other agent to act on. Do not acknowledge receipt without new information.",
+    "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
+    'Reply to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+    "Do not acknowledge receipt without new information.",
   ].join("\n\n");
 
 const updateIds = (state: PairedState): void => {

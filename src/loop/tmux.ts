@@ -123,10 +123,20 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
 };
 
 const pairedBridgeGuidance = (agent: Agent): string => {
-  const peer = agent === "claude" ? "Codex" : "Claude";
+  if (agent === "claude") {
+    return [
+      "Paired mode:",
+      "You are in a persistent Claude/Codex pair.",
+      'When Codex sends you an inbound channel message, reply to Codex with the MCP tool "reply" and reuse the same chat_id.',
+      'Use "send_to_agent" only when you need to start a new proactive message to Codex.',
+      "Do not ask the human to relay messages between agents. Do not answer the human when Codex is waiting for the response.",
+      'Use "bridge_status" only for diagnostics if direct delivery seems stuck. Use "receive_messages" only as a manual fallback.',
+    ].join("\n");
+  }
+
   return [
     "Paired mode:",
-    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want ${peer} to act, review, or answer.`,
+    'You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want Claude to act, review, or answer.',
     "Do not ask the human to relay messages between agents. Normal paired messages should arrive directly.",
     'Use "bridge_status" only for diagnostics if direct delivery seems stuck. Use "receive_messages" only as a manual fallback.',
   ].join("\n");
@@ -215,13 +225,13 @@ const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
   const parts = [
     `Paired tmux mode. ${primary} is the primary agent for this run.`,
     "No task has been assigned yet.",
-    `You are ${capitalize(agent)}. Your reviewer/support role is active, but do not start implementing or verifying anything until ${primary} or the human gives you a specific request.`,
+    `You are ${capitalize(agent)}. Your reviewer/support role is active, but do not start implementing or verifying anything until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(pairedBridgeGuidance(agent));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. I am waiting for your request." After that, wait for the human or ${primary} to provide a concrete task or review request.`
+    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. I am waiting for your request." After that, wait for ${primary} to provide a concrete task or review request. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
   );
   return parts.join("\n\n");
 };

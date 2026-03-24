@@ -308,6 +308,9 @@ test("bridge MCP handles standard empty-list and ping requests through the CLI p
   expect(result.stdout).toContain(
     '\\"reply\\" tool and pass back the same chat_id'
   );
+  expect(result.stdout).toContain(
+    "Never answer the human when the inbound message came from Codex"
+  );
   expect(result.stdout).toContain('"id":2');
   expect(result.stdout).toContain('"result":{}');
   expect(result.stdout).toContain('"id":3');

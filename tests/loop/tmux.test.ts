@@ -495,6 +495,10 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
   expect(peerPrompt).toContain("Reviewer ready.");
+  expect(peerPrompt).toContain('"reply"');
+  expect(peerPrompt).toContain(
+    "Do not answer the human when Codex is waiting for the response."
+  );
 });
 
 test("interactive tmux prompts tell both agents to wait for the human", () => {
@@ -509,7 +513,14 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
   expect(peerPrompt).toContain("Reviewer ready. No task yet.");
-  expect(peerPrompt).toContain("wait for the human");
+  expect(peerPrompt).toContain("human clearly assigns you separate work");
+  expect(peerPrompt).toContain('"reply"');
+  expect(peerPrompt).toContain(
+    "Do not answer the human when Codex is waiting for the response."
+  );
+  expect(peerPrompt).toContain(
+    "If you are answering Codex, use the bridge tools instead of a human-facing reply."
+  );
 });
 
 test("runInTmux auto-confirms Claude startup prompts in paired mode", async () => {
