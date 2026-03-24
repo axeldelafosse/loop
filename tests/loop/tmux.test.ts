@@ -130,6 +130,9 @@ test("runInTmux starts detached session and strips --tmux", async () => {
     "remain-on-exit",
     "on",
   ]);
+  expect(logs[0]).toBe(
+    "[loop] starting tmux session. This can take a few seconds..."
+  );
   expect(logs).toContain('[loop] started tmux session "repo-loop-1"');
   expect(logs).toContain("[loop] attach with: tmux attach -t repo-loop-1");
   expect(attaches).toEqual(["repo-loop-1"]);
@@ -188,6 +191,7 @@ test("runInTmux keeps explicit run id in single-agent mode", async () => {
 
 test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   const calls: string[][] = [];
+  const logs: string[] = [];
   const proxyCalls: Array<{
     remoteUrl: string;
     runDir: string;
@@ -232,7 +236,9 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       getLastCodexThreadId: () => "codex-thread-1",
       isInteractive: () => false,
       launchArgv: ["bun", "/repo/src/cli.ts"],
-      log: (): void => undefined,
+      log: (line: string) => {
+        logs.push(line);
+      },
       makeClaudeSessionId: () => "claude-session-1",
       preparePairedRun: (nextOpts) => {
         nextOpts.codexMcpConfigArgs = codexMcpConfigArgs;
@@ -367,6 +373,11 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
   );
+  expect(logs[0]).toBe(
+    "[loop] starting paired tmux workspace. This can take a few seconds..."
+  );
+  expect(logs).toContain('[loop] started tmux session "repo-loop-1"');
+  expect(logs).toContain("[loop] attach with: tmux attach -t repo-loop-1");
   expect(manifest.claudeSessionId).toBe("claude-session-1");
   expect(manifest.codexRemoteUrl).toBe(codexRemoteUrl);
   expect(manifest.codexThreadId).toBe("codex-thread-1");

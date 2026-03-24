@@ -538,6 +538,11 @@ const buildSessionCommand = (
   ]);
 };
 
+const tmuxStartupMessage = (paired: boolean): string =>
+  paired
+    ? "[loop] starting paired tmux workspace. This can take a few seconds..."
+    : "[loop] starting tmux session. This can take a few seconds...";
+
 const updatePairedManifest = (
   deps: TmuxDeps,
   storage: RunStorage,
@@ -1064,8 +1069,14 @@ export const runInTmux = async (
     throw new Error(TMUX_MISSING_ERROR);
   }
 
+  const pairedLaunch =
+    Boolean(launch) &&
+    !isSingleAgentMode(argv) &&
+    Boolean(launch?.opts.pairedMode);
+  deps.log(tmuxStartupMessage(pairedLaunch));
+
   const session =
-    launch && !isSingleAgentMode(argv) && launch.opts.pairedMode
+    pairedLaunch && launch
       ? await startPairedSession(deps, launch)
       : findSession(argv, deps);
 
