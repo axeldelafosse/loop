@@ -373,6 +373,92 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   expect(manifest.tmuxSession).toBe("repo-loop-1");
 });
 
+test("runInTmux starts paired interactive tmux panes without a task", async () => {
+  const calls: string[][] = [];
+  const typed: Array<{ pane: string; text: string }> = [];
+  let sessionStarted = false;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const opts = makePairedOptions({ proof: "" });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  const delegated = await runInTmux(
+    ["--tmux"],
+    {
+      capturePane: () => "",
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (): void => undefined,
+      sendText: (pane: string, text: string) => {
+        typed.push({ pane, text });
+      },
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    { opts }
+  );
+
+  expect(delegated).toBe(true);
+  expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  const typedByPane = new Map<string, string[]>();
+  for (const entry of typed) {
+    const values = typedByPane.get(entry.pane) ?? [];
+    values.push(entry.text);
+    typedByPane.set(entry.pane, values);
+  }
+  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
+    tmuxInternals.buildInteractivePeerPrompt(opts, "claude")
+  );
+  expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
+    tmuxInternals.buildInteractivePrimaryPrompt(opts)
+  );
+  expect(manifest.tmuxSession).toBe("repo-loop-1");
+});
+
 test("tmux prompts keep the paired review workflow explicit", () => {
   const opts = makePairedOptions();
   const primaryPrompt = tmuxInternals.buildPrimaryPrompt("Ship feature", opts);
@@ -391,6 +477,20 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
   expect(peerPrompt).toContain("Reviewer ready.");
+});
+
+test("interactive tmux prompts tell both agents to wait for the human", () => {
+  const opts = makePairedOptions({ proof: "" });
+  const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(opts);
+  const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(opts, "claude");
+
+  expect(primaryPrompt).toContain("No task has been assigned yet.");
+  expect(primaryPrompt).toContain(
+    "Wait for the human to provide the first task"
+  );
+  expect(peerPrompt).toContain("No task has been assigned yet.");
+  expect(peerPrompt).toContain("Reviewer ready. No task yet.");
+  expect(peerPrompt).toContain("wait for the human");
 });
 
 test("runInTmux auto-confirms Claude startup prompts in paired mode", async () => {

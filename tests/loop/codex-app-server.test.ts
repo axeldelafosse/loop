@@ -1,6 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { buildCodexBridgeConfigArgs } from "../../src/loop/bridge";
-import { codexAppServerInternals } from "../../src/loop/codex-app-server";
 import type { Options } from "../../src/loop/types";
 
 interface RequestFrame {
@@ -54,6 +53,7 @@ const createStream = (): TestStream => {
 
 let modulePromise: Promise<AppServerModule> | undefined;
 let moduleExports: AppServerModule | undefined;
+let codexAppServerInternals: AppServerModule["codexAppServerInternals"];
 let processes: TestProcess[] = [];
 let currentHandler: RequestHandler = noopRequestHandler;
 let lastSpawnCommand: string[] = [];
@@ -157,9 +157,12 @@ const installConnectWs = (appServerModule: AppServerModule): void => {
 
 const getModule = async (): Promise<AppServerModule> => {
   if (!modulePromise) {
-    modulePromise = import("../../src/loop/codex-app-server");
+    modulePromise = import(
+      `../../src/loop/codex-app-server?test=${Date.now()}-${Math.random()}`
+    );
   }
   moduleExports = await modulePromise;
+  codexAppServerInternals = moduleExports.codexAppServerInternals;
   installSpawn(moduleExports);
   installConnectWs(moduleExports);
   return moduleExports;
@@ -200,7 +203,8 @@ afterEach(async () => {
   mock.restore();
 });
 
-test("parseLine returns strict JSON frames only", () => {
+test("parseLine returns strict JSON frames only", async () => {
+  await getModule();
   expect(codexAppServerInternals.parseLine('{"ok":true}')).toEqual({
     ok: true,
   });
@@ -208,7 +212,8 @@ test("parseLine returns strict JSON frames only", () => {
   expect(codexAppServerInternals.parseLine('  {"ok":1}\n')).toEqual({ ok: 1 });
 });
 
-test("parseText flattens nested text payloads", () => {
+test("parseText flattens nested text payloads", async () => {
+  await getModule();
   expect(
     codexAppServerInternals.parseText({
       content: [{ text: "  one " }, { content: [{ text: "two" }, ""] }],

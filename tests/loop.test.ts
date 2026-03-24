@@ -38,7 +38,7 @@ interface CliModuleDeps {
   runInTmux?: (
     argv: string[],
     overrides?: unknown,
-    launch?: { opts: Options; task: string }
+    launch?: { opts: Options; task?: string }
   ) => boolean | Promise<boolean>;
   runLoop?: (task: string, opts: Options) => Promise<void>;
   runPanel?: () => Promise<void>;
@@ -151,6 +151,27 @@ test("runCli starts panel when argv is empty", async () => {
   expect(runLoopMock).not.toHaveBeenCalled();
 });
 
+test("runCli starts panel for dashboard command", async () => {
+  const {
+    maybeEnterWorktreeMock,
+    parseArgsMock,
+    resolveTaskMock,
+    runCli,
+    runInTmuxMock,
+    runLoopMock,
+    runPanelMock,
+  } = await loadRunCli();
+
+  await runCli(["dashboard"]);
+
+  expect(runPanelMock).toHaveBeenCalledTimes(1);
+  expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
+  expect(runInTmuxMock).not.toHaveBeenCalled();
+  expect(parseArgsMock).not.toHaveBeenCalled();
+  expect(resolveTaskMock).not.toHaveBeenCalled();
+  expect(runLoopMock).not.toHaveBeenCalled();
+});
+
 test("runCli runs task flow when argv has options", async () => {
   const opts = makeOptions();
   const {
@@ -209,6 +230,33 @@ test("runCli delegates paired tmux after resolving the task", async () => {
   );
   expect(runLoopMock).not.toHaveBeenCalled();
   expect(runPanelMock).not.toHaveBeenCalled();
+  expect(closeAppServerMock).not.toHaveBeenCalled();
+  expect(closeClaudeSdkMock).not.toHaveBeenCalled();
+});
+
+test("runCli starts paired interactive tmux without resolving a task", async () => {
+  const opts = { ...makeOptions(), proof: "", tmux: true };
+  const {
+    closeAppServerMock,
+    closeClaudeSdkMock,
+    maybeEnterWorktreeMock,
+    runCli,
+    runInTmuxMock,
+    resolveTaskMock,
+    runLoopMock,
+    runPanelMock,
+  } = await loadRunCli({
+    parseArgs: () => opts,
+    runInTmux: () => true,
+  });
+
+  await runCli(["--tmux"]);
+
+  expect(runPanelMock).not.toHaveBeenCalled();
+  expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
+  expect(resolveTaskMock).not.toHaveBeenCalled();
+  expect(runInTmuxMock).toHaveBeenCalledWith(["--tmux"], undefined, { opts });
+  expect(runLoopMock).not.toHaveBeenCalled();
   expect(closeAppServerMock).not.toHaveBeenCalled();
   expect(closeClaudeSdkMock).not.toHaveBeenCalled();
 });

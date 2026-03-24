@@ -63,24 +63,37 @@ Installer currently supports macOS and Linux and installs `loop`, `claude-loop`,
 # run from source
 ./loop.ts --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
+# start paired interactive tmux workspace with no task yet
+./loop.ts --tmux
+
 # open live panel of running claude/codex instances
 ./loop.ts
+
+# same panel explicitly
+./loop.ts dashboard
 
 # build executable
 bun run build
 ./loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
+# start paired interactive tmux workspace with no task yet
+./loop --tmux
+
 # same live panel behavior on built binary
 ./loop
+
+# same panel explicitly
+./loop dashboard
 ```
 
 Some notes:
 
 - Default mode is paired: `--agent` selects the primary worker and the other model stays available as reviewer/support.
 - You can pass prompt text positionally (`loop "Implement {feature}"`) or via `--prompt`.
-- `--proof` is required and should describe how to prove the task works (tests, commands, and checks to run). You should be super specific based on the prompt.
+- `--proof` is strongly recommended for autonomous task runs and should describe how to prove the task works (tests, commands, and checks to run). Be specific.
+- `loop --tmux` with no prompt and no proof starts a paired interactive tmux workspace and waits for you to provide the first task in the TUIs.
 - If the input is plain text (not a `.md` path), `loop` first runs a planning step to create `PLAN.md`, then uses `PLAN.md` for the main loop.
-- Running with no args opens the live panel for active sessions, recent paired runs, and tmux sessions. To run the loop with `PLAN.md`, pass at least `--proof`.
+- Running with no args opens the live panel for active sessions, recent paired runs, and tmux sessions. `loop dashboard` does the same thing explicitly.
 - If no prompt is provided and options are present, `loop` will use `PLAN.md` if it exists.
 
 ## Paired mode and resume
@@ -151,6 +164,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 
 - `claude-loop`: shorthand for `loop --claude-only`
 - `codex-loop`: shorthand for `loop --codex-only`
+- `dashboard`: open the live panel for active sessions, recent paired runs, and tmux sessions
 - `-a, --agent <claude|codex>`: agent to run (default: `codex`)
 - `--claude-only`: use Claude for work, review, and plan review
 - `--codex-only`: use Codex for work, review, and plan review
@@ -166,13 +180,19 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `--review-plan [other|claude|codex|none]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model). Use `none` to skip plan review.
 - `--run-id <id>`: reuse a specific run id. In paired mode this resumes the stored run state and keeps tmux/worktree naming aligned to that id.
 - `--session <id>`: resume from a paired run id or stored Claude/Codex session id. In single-agent mode, raw session/thread ids are passed through directly.
-- `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects. In paired mode, Claude and Codex open side-by-side in the same tmux workspace. Session name format: `repo-loop-X`
+- `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects. In paired mode, Claude and Codex open side-by-side in the same tmux workspace. With no prompt and no proof, paired mode starts an interactive workspace and waits for the first task. Session name format: `repo-loop-X`
 - `--worktree`: create and run inside a fresh git worktree + branch automatically. Resumed run ids re-enter or recreate the matching worktree when possible. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help
 
 ## Examples
 
 ```bash
+# start paired interactive tmux workspace with no task yet
+loop --tmux
+
+# open the live dashboard explicitly
+loop dashboard
+
 # use PLAN.md automatically
 loop --proof "Use {skill} to verify your changes"
 

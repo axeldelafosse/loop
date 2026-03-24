@@ -86,7 +86,7 @@ interface TmuxDeps {
 
 interface PairedTmuxLaunch {
   opts: Options;
-  task: string;
+  task?: string;
 }
 
 const quoteShellArg = (value: string): string =>
@@ -181,6 +181,50 @@ const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
     `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. I have the task context and I am waiting for your request." After that, wait for ${primary} to send you a targeted request or review ask.`
   );
   return parts.join("\n\n");
+};
+
+const buildInteractivePrimaryPrompt = (opts: Options): string => {
+  const peer = capitalize(peerAgent(opts.agent));
+  const parts = [
+    `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    "No task has been assigned yet.",
+    `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" when you want ${peer} to review work, answer questions, or help once the human gives you a task.`,
+  ];
+  appendProofPrompt(parts, opts.proof);
+  parts.push(pairedBridgeGuidance(opts.agent));
+  parts.push(pairedWorkflowGuidance(opts, opts.agent));
+  parts.push(
+    `Wait for the human to provide the first task. Do not start implementing anything until a task arrives. Once you have a concrete task, coordinate directly with ${peer} and keep the paired review workflow intact.`
+  );
+  return parts.join("\n\n");
+};
+
+const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
+  const primary = capitalize(opts.agent);
+  const parts = [
+    `Paired tmux mode. ${primary} is the primary agent for this run.`,
+    "No task has been assigned yet.",
+    `You are ${capitalize(agent)}. Your reviewer/support role is active, but do not start implementing or verifying anything until ${primary} or the human gives you a specific request.`,
+  ];
+  appendProofPrompt(parts, opts.proof);
+  parts.push(pairedBridgeGuidance(agent));
+  parts.push(pairedWorkflowGuidance(opts, agent));
+  parts.push(
+    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. I am waiting for your request." After that, wait for the human or ${primary} to provide a concrete task or review request.`
+  );
+  return parts.join("\n\n");
+};
+
+const buildLaunchPrompt = (launch: PairedTmuxLaunch, agent: Agent): string => {
+  const task = launch.task?.trim();
+  if (!task) {
+    return launch.opts.agent === agent
+      ? buildInteractivePrimaryPrompt(launch.opts)
+      : buildInteractivePeerPrompt(launch.opts, agent);
+  }
+  return launch.opts.agent === agent
+    ? buildPrimaryPrompt(task, launch.opts)
+    : buildPeerPrompt(task, launch.opts, agent);
 };
 
 const resolveTmuxModel = (agent: Agent, opts: Options): string => {
@@ -732,14 +776,8 @@ const startPairedSession = async (
   const claudeChannelServer = buildClaudeChannelServerName(storage.runId);
   registerClaudeChannelServer(deps, claudeChannelServer, storage.runDir);
   const env = [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${storage.runId}`];
-  const claudePrompt =
-    launch.opts.agent === "claude"
-      ? buildPrimaryPrompt(launch.task, launch.opts)
-      : buildPeerPrompt(launch.task, launch.opts, "claude");
-  const codexPrompt =
-    launch.opts.agent === "codex"
-      ? buildPrimaryPrompt(launch.task, launch.opts)
-      : buildPeerPrompt(launch.task, launch.opts, "codex");
+  const claudePrompt = buildLaunchPrompt(launch, "claude");
+  const codexPrompt = buildLaunchPrompt(launch, "codex");
   const claudeCommand = buildShellCommand([
     "env",
     ...env,
@@ -1053,7 +1091,10 @@ export const tmuxInternals = {
   buildClaudeChannelServerConfig,
   buildClaudeChannelServerName,
   buildCodexCommand,
+  buildInteractivePeerPrompt,
+  buildInteractivePrimaryPrompt,
   buildLaunchArgv,
+  buildLaunchPrompt,
   buildPeerPrompt,
   buildPrimaryPrompt,
   buildRunName,

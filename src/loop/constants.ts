@@ -12,6 +12,7 @@ loop - v${LOOP_VERSION} - meta agent loop runner
 
 Usage:
   loop                                     Open live panel for running claude/codex instances
+  loop dashboard                           Open live panel for running claude/codex instances
   loop [options] [prompt]
   loop update                              Check for updates and apply if available
   loop upgrade                             Alias for update
@@ -34,7 +35,7 @@ Options:
   --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
   --run-id <id>                            Reuse a specific run id; resumes paired runs in paired mode
   --session <id>                           Resume from a paired run id or raw session/thread ID
-  --tmux                                   Run in tmux (paired mode opens Claude/Codex side-by-side)
+  --tmux                                   Run in tmux (paired mode opens Claude/Codex side-by-side; no prompt/proof starts interactive TUIs)
   --worktree                               Create and run in a fresh git worktree (name: repo-loop-X)
   -v, --version                            Show loop version
   -h, --help                               Show this help

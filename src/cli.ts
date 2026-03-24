@@ -16,6 +16,9 @@ import type { Agent } from "./loop/types";
 import { updateDeps } from "./loop/update-deps";
 
 const TMUX_DETACH_HINT = "[loop] detach with Ctrl-b d";
+const DASHBOARD_COMMAND = "dashboard";
+const INTERACTIVE_TMUX_ERROR =
+  "[loop] interactive paired tmux mode must be started outside tmux.";
 
 const parseBridgeArgs = (argv: string[]): { runDir: string; source: Agent } => {
   const [runDir, source] = argv;
@@ -82,6 +85,10 @@ export const runCli = async (argv: string[]): Promise<void> => {
       await cliDeps.runPanel();
       return;
     }
+    if (argv[0]?.toLowerCase() === DASHBOARD_COMMAND) {
+      await cliDeps.runPanel();
+      return;
+    }
     const opts = cliDeps.parseArgs(argv);
     if (opts.tmux && !opts.pairedMode && (await cliDeps.runInTmux(argv))) {
       shouldCloseAgents = false;
@@ -92,6 +99,18 @@ export const runCli = async (argv: string[]): Promise<void> => {
       console.log(gitWarning);
     }
     await cliDeps.maybeEnterWorktree(opts);
+    if (
+      opts.tmux &&
+      opts.pairedMode &&
+      !opts.promptInput?.trim() &&
+      !opts.proof.trim()
+    ) {
+      if (await cliDeps.runInTmux(argv, undefined, { opts })) {
+        shouldCloseAgents = false;
+        return;
+      }
+      throw new Error(INTERACTIVE_TMUX_ERROR);
+    }
     const task = await cliDeps.resolveTask(opts);
     if (
       opts.tmux &&
