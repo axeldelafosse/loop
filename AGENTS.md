@@ -10,8 +10,10 @@ Please keep the code dead-simple and keep the `src/loop/main.ts` file under 150 
 # Repo Workflows
 
 - Plain-text prompts auto-create `PLAN.md` first, then optionally run `--review-plan`; if you are changing planning behavior, keep that flow aligned.
-- Running `loop` with no args opens the live panel for active sessions; keep panel-only changes separate from task-running changes when possible.
-- `--tmux` and `--worktree` are first-class execution modes; preserve them when changing CLI parsing or startup flow.
+- Default CLI behavior is paired Claude/Codex execution with persisted run state under `~/.loop/runs`; preserve `--run-id` / `--session` resume behavior when changing startup, planning, or loop flow.
+- Running `loop` with no args opens the live panel for active sessions, loop-owned paired runs, and tmux sessions; keep panel-only changes separate from task-running changes when possible.
+- `--tmux` and `--worktree` are first-class execution modes. In paired mode, tmux opens Claude/Codex side-by-side and resumed run ids should stay aligned with matching tmux/worktree names.
+- `--claude-only` and `--codex-only` switch out of the default paired flow; keep single-agent behavior working when changing shared CLI parsing or resume logic.
 - `loop update` / `loop upgrade` are supported manual update commands for installed binaries; source runs should continue to rely on `git pull`.
 
 # Coding Standards

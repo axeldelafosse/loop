@@ -1,6 +1,6 @@
 # loop
 
-Dead-simple Bun CLI that runs `codex` and `claude` in a loop. The [main loop](https://github.com/axeldelafosse/loop/blob/main/src/loop/main.ts#L14) is ~50 lines of easy-to-read code.
+Dead-simple Bun CLI that runs `codex` and `claude` in a loop. Use `--tmux` to run the interactive TUIs side-by-side. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
 
 Install:
 ```bash
@@ -9,7 +9,7 @@ curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh 
 
 Run:
 ```bash
-loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --worktree
+loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --tmux
 ```
 
 ## What this is
@@ -20,11 +20,11 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 
 ## What it does
 
-- Runs `codex` or `claude` with a PLAN.md and a proof
-- Loops until agent proved that the tasks were completed successfully
-- Runs a review pass with both `codex` and `claude` before exiting
-- Addresses the comments automatically
-- Creates a draft PR
+- Runs in paired mode by default: one agent does the work, the other stays available for review/support
+- Keeps Claude and Codex sessions persistent across iterations and bridges messages between them
+- Stores paired run state under `~/.loop/runs/...` so runs can be resumed by run id or session/thread id
+- Loops until the task is proven done, then runs reviews and creates a draft PR
+- Opens a live panel with active sessions, recent loop-owned runs, and tmux sessions when launched with no args
 
 ## Setup
 
@@ -43,7 +43,8 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 ## Requirements
 
 - `codex` and/or `claude` installed and logged in
-- [Bun](https://bun.com) to build/run from source. Prebuilt binaries do not require Bun.
+- [tmux](https://github.com/tmux/tmux) if you want to run the TUIs side-by-side
+- [Bun](https://bun.com) to build/run from source (prebuilt binaries do not require Bun)
 
 ## Install prebuilt binary
 
@@ -72,11 +73,23 @@ bun run build
 
 Some notes:
 
+- Default mode is paired: `--agent` selects the primary worker and the other model stays available as reviewer/support.
 - You can pass prompt text positionally (`loop "Implement {feature}"`) or via `--prompt`.
 - `--proof` is required and should describe how to prove the task works (tests, commands, and checks to run). You should be super specific based on the prompt.
 - If the input is plain text (not a `.md` path), `loop` first runs a planning step to create `PLAN.md`, then uses `PLAN.md` for the main loop.
-- Running with no args opens the live panel. To run the loop with `PLAN.md`, pass at least `--proof`.
+- Running with no args opens the live panel for active sessions, recent paired runs, and tmux sessions. To run the loop with `PLAN.md`, pass at least `--proof`.
 - If no prompt is provided and options are present, `loop` will use `PLAN.md` if it exists.
+
+## Paired mode and resume
+
+Paired mode is the default. `loop` starts one primary worker (`--agent`, default: `codex`) and keeps the other model available as a persistent reviewer/support agent. They coordinate directly through the built-in bridge instead of asking the human to relay messages.
+
+Each paired run gets a run id and a manifest under `~/.loop/runs/<repo-id>/<run-id>/`.
+
+- Use `--run-id <id>` to resume a specific paired run.
+- Use `--session <id>` to resolve an existing paired run from its run id, Claude session id, or Codex thread id.
+- In single-agent mode, `--session <id>` still works as a raw Claude/Codex session resume flag.
+- When combined with `--worktree` or `--tmux`, resumed paired runs keep the same run id so worktree and tmux naming stay aligned.
 
 ## Install globally (symlink)
 
@@ -148,8 +161,10 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `--format <pretty|raw>`: output format (default: `pretty`)
 - `--review [claude|codex|claudex]`: run a review when done (default: `claudex`; bare `--review` also uses `claudex`). With `claudex`, both reviews run in parallel, then both comments are passed back to the original agent so it can decide what to address. If both reviews found the same issue, that is a stronger signal to fix it.
 - `--review-plan [other|claude|codex|none]`: reviewer for the automatic plan review pass that runs after plain-text prompts create `PLAN.md` (default: `other`, the non-primary model). Use `none` to skip plan review.
-- `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects (auto-attaches when interactive). Session name format: `repo-loop-X`
-- `--worktree`: create and run inside a fresh git worktree + branch automatically. Worktree/branch format: `repo-loop-X`
+- `--run-id <id>`: reuse a specific run id. In paired mode this resumes the stored run state and keeps tmux/worktree naming aligned to that id.
+- `--session <id>`: resume from a paired run id or stored Claude/Codex session id. In single-agent mode, raw session/thread ids are passed through directly.
+- `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects. In paired mode, Claude and Codex open side-by-side in the same tmux workspace. Session name format: `repo-loop-X`
+- `--worktree`: create and run inside a fresh git worktree + branch automatically. Resumed run ids re-enter or recreate the matching worktree when possible. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help
 
 ## Examples
@@ -158,14 +173,8 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 # use PLAN.md automatically
 loop --proof "Use {skill} to verify your changes"
 
-# two iteration, raw JSON/event output
-loop -m 2 --proof "Use {skill} to verify your changes" "Implement {feature}" --format raw
-
 # plain text prompt: auto-creates PLAN.md, then auto-reviews with the other model (default)
 loop --proof "Use {skill} to verify your changes" "Implement {feature}"
-
-# plain text prompt: override the plan reviewer
-loop --proof "Use {skill} to verify your changes" --review-plan claude "Implement {feature}"
 
 # plain text prompt: skip automatic plan review
 loop --proof "Use {skill} to verify your changes" --review-plan none "Implement {feature}"
@@ -194,6 +203,12 @@ loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review
 
 # run in detached tmux session (good for SSH)
 loop --tmux --proof "Use {skill} to verify your changes" "Implement {feature}"
+
+# resume a paired run by run id
+loop --run-id 7 --proof "Use {skill} to verify your changes"
+
+# resume a paired run from a stored Claude session or Codex thread id
+loop --session codex-thread-123 --proof "Use {skill} to verify your changes"
 
 # run in a fresh git worktree automatically
 loop --worktree --proof "Use {skill} to verify your changes" "Implement {feature}"
