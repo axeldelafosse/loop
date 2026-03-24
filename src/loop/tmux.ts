@@ -51,6 +51,11 @@ interface SpawnResult {
   stderr: string;
 }
 
+interface TerminalSize {
+  columns: number;
+  rows: number;
+}
+
 interface GitResult {
   exitCode: number;
   stderr: string;
@@ -65,6 +70,7 @@ interface TmuxDeps {
   findBinary: (cmd: string) => boolean;
   getCodexAppServerUrl: () => string;
   getLastCodexThreadId: () => string;
+  getTerminalSize: () => TerminalSize | undefined;
   isInteractive: () => boolean;
   launchArgv: string[];
   log: (line: string) => void;
@@ -495,6 +501,20 @@ const commandExists = (cmd: string): boolean => {
 const isSessionConflict = (stderr: string): boolean =>
   SESSION_CONFLICT_RE.test(stderr);
 
+const isTerminalDimension = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const buildSessionSizeArgs = (deps: TmuxDeps): string[] => {
+  const size = deps.getTerminalSize();
+  if (!size) {
+    return [];
+  }
+  if (!(isTerminalDimension(size.columns) && isTerminalDimension(size.rows))) {
+    return [];
+  }
+  return ["-x", String(size.columns), "-y", String(size.rows)];
+};
+
 const sessionExists = (
   session: string,
   spawnFn: TmuxDeps["spawn"]
@@ -807,6 +827,7 @@ const startPairedSession = async (
     "tmux",
     "new-session",
     "-d",
+    ...buildSessionSizeArgs(deps),
     "-s",
     session,
     "-c",
@@ -885,6 +906,7 @@ const startRequestedSession = (
     "tmux",
     "new-session",
     "-d",
+    ...buildSessionSizeArgs(deps),
     "-s",
     candidate,
     "-c",
@@ -920,6 +942,7 @@ const startAutoSession = (
       "tmux",
       "new-session",
       "-d",
+      ...buildSessionSizeArgs(deps),
       "-s",
       candidate,
       "-c",
@@ -961,6 +984,14 @@ const defaultDeps = (): TmuxDeps => ({
   findBinary: (cmd: string) => commandExists(cmd),
   getCodexAppServerUrl,
   getLastCodexThreadId,
+  getTerminalSize: () => {
+    const columns = process.stdout.columns;
+    const rows = process.stdout.rows;
+    if (!(isTerminalDimension(columns) && isTerminalDimension(rows))) {
+      return undefined;
+    }
+    return { columns, rows };
+  },
   isInteractive: () => Boolean(process.stdin.isTTY && process.stdout.isTTY),
   launchArgv: buildLaunchArgv(),
   log: (line: string) => {
