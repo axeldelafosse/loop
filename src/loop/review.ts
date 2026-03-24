@@ -6,7 +6,9 @@ import type {
   Options,
   ReviewFailure,
   ReviewMode,
+  ReviewOutcome,
   ReviewResult,
+  ReviewStatus,
   RunResult,
 } from "./types";
 
@@ -24,17 +26,15 @@ const REVIEW_TRAILING_SIGNAL =
 const QUOTED_REVIEW_PASS = `"${REVIEW_PASS}"`;
 const QUOTED_REVIEW_FAIL = `"${REVIEW_FAIL}"`;
 
-type ReviewSignal = "pass" | "fail";
-
 interface ReviewCheck {
   reason: string;
-  status: "pass" | "fail";
+  status: ReviewStatus;
 }
 
 interface ReviewSignalSummary {
   finalLine: string | undefined;
   finalLineIndex: number | undefined;
-  finalSignal: ReviewSignal | undefined;
+  finalSignal: ReviewStatus | undefined;
   hasFailSignal: boolean;
   hasPassSignal: boolean;
   lastSignalLineIndex: number | undefined;
@@ -44,7 +44,7 @@ interface ReviewSignalSummary {
 const cleanOutputText = (text: string): string =>
   text.replace(/\r/g, "").trimEnd();
 
-const parseSignal = (line: string): ReviewSignal | undefined => {
+const parseSignal = (line: string): ReviewStatus | undefined => {
   const trimmed = line.trim();
   if (trimmed === REVIEW_PASS || trimmed === QUOTED_REVIEW_PASS) {
     return "pass";
@@ -305,11 +305,24 @@ const runReviewWith = async (
   };
 
   const failures: ReviewFailure[] = [];
+  const reviews: ReviewOutcome[] = [];
 
   const addFailure = (reviewer: Agent, reason: string): void => {
     failures.push({
       reason: reason.trim() || REVIEW_FAILURE_FALLBACK,
       reviewer,
+    });
+  };
+
+  const addReview = (
+    reviewer: Agent,
+    status: ReviewStatus,
+    reason: string
+  ): void => {
+    reviews.push({
+      reason: reason.trim(),
+      reviewer,
+      status,
     });
   };
 
@@ -319,6 +332,7 @@ const runReviewWith = async (
   for (const [index, outcome] of settled.entries()) {
     if (outcome.status === "fulfilled") {
       const check = evaluateOutput(outcome.value.result);
+      addReview(outcome.value.reviewer, check.status, check.reason);
       if (check.status === "fail") {
         addFailure(outcome.value.reviewer, check.reason);
       }
@@ -326,7 +340,9 @@ const runReviewWith = async (
     }
 
     const reviewer = orderedReviewers[index];
-    addFailure(reviewer, reasonForFailure(reviewer, outcome.reason));
+    const reason = reasonForFailure(reviewer, outcome.reason);
+    addReview(reviewer, "fail", reason);
+    addFailure(reviewer, reason);
   }
 
   return {
@@ -337,6 +353,7 @@ const runReviewWith = async (
     failureCount: failures.length,
     failures,
     notes: formatReviewNotes(failures),
+    reviews,
   };
 };
 

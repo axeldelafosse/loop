@@ -7,7 +7,7 @@ import {
   readPendingBridgeMessages,
 } from "./bridge";
 import { findFreePort } from "./ports";
-import { readRunManifest } from "./run-state";
+import { isActiveRunState, readRunManifest } from "./run-state";
 import { connectWs, type WsClient } from "./ws-client";
 
 const CODEX_PROXY_BASE_PORT = 4600;
@@ -423,7 +423,7 @@ class CodexTmuxProxy {
 
   private shouldStop(): boolean {
     const manifest = readRunManifest(join(this.runDir, "manifest.json"));
-    if (!manifest || manifest.status !== "running") {
+    if (!(manifest && isActiveRunState(manifest.state))) {
       return true;
     }
     const sessionAlive = manifest.tmuxSession

@@ -2,6 +2,7 @@ import { buildCodexBridgeConfigArgs, ensureClaudeBridgeConfig } from "./bridge";
 import {
   createRunManifest,
   ensureRunStorage,
+  isActiveRunState,
   type RunManifest,
   type RunStorage,
   readRunManifest,
@@ -32,8 +33,7 @@ interface RequestedRunState {
 }
 
 export const canResumePairedManifest = (manifest?: RunManifest): boolean => {
-  const status = manifest?.status;
-  return status === "running" || status === "active";
+  return manifest ? isActiveRunState(manifest.state) : false;
 };
 
 const resolveRequestedRunState = (
@@ -120,7 +120,7 @@ export const resolvePreparedRunState = (
     pid: process.pid,
     repoId: storage.repoId,
     runId: storage.runId,
-    status: "running",
+    state: "submitted",
   });
   writeRunManifest(storage.manifestPath, manifest);
   return {
@@ -180,7 +180,7 @@ export const preparePairedRun = (
           cwd,
           mode: "paired",
           pid: process.pid,
-          status: "running",
+          state: resumable?.state ?? "submitted",
           // Non-tmux resumes should not preserve a dead tmux routing hint.
           tmuxSession: opts.tmux ? existing.tmuxSession : undefined,
         },
@@ -194,7 +194,7 @@ export const preparePairedRun = (
         pid: process.pid,
         repoId: storage.repoId,
         runId: storage.runId,
-        status: "running",
+        state: "submitted",
       });
   writeRunManifest(storage.manifestPath, manifest);
   return { manifest, storage };

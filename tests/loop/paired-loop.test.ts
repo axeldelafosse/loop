@@ -489,7 +489,7 @@ test("runPairedLoop seeds a fresh paired run from a raw primary session id", asy
   });
 });
 
-test("runPairedLoop marks a failed startup as stopped", async () => {
+test("runPairedLoop marks a failed startup as failed", async () => {
   const module = await loadPairedLoop();
   startPersistentAgentSessionImpl = (agent) => {
     if (agent === "claude") {
@@ -503,12 +503,12 @@ test("runPairedLoop marks a failed startup as stopped", async () => {
       module.runPairedLoop("Ship feature", makeOptions())
     ).rejects.toThrow("claude start failed");
     expect(readRunManifest(join(runDir, "manifest.json"))?.status).toBe(
-      "stopped"
+      "failed"
     );
   });
 });
 
-test("runPairedLoop creates an empty transcript when no bridge traffic occurs", async () => {
+test("runPairedLoop records structured lifecycle events when no bridge traffic occurs", async () => {
   const module = await loadPairedLoop();
 
   await withTempHome("4a", async (runDir) => {
@@ -516,7 +516,16 @@ test("runPairedLoop creates an empty transcript when no bridge traffic occurs", 
 
     const transcriptPath = join(runDir, "transcript.jsonl");
     expect(existsSync(transcriptPath)).toBe(true);
-    expect(readFileSync(transcriptPath, "utf8")).toBe("");
+    expect(readFileSync(transcriptPath, "utf8")).toContain(
+      '"state":"submitted"'
+    );
+    expect(readFileSync(transcriptPath, "utf8")).toContain('"state":"working"');
+    expect(readFileSync(transcriptPath, "utf8")).toContain(
+      '"result":"done-signal-detected"'
+    );
+    expect(readFileSync(transcriptPath, "utf8")).toContain(
+      '"state":"completed"'
+    );
   });
 });
 

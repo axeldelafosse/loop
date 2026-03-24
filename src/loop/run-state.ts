@@ -14,11 +14,36 @@ import {
   sanitizeBase,
   validateRunId,
 } from "./git";
+import type {
+  Agent,
+  ReviewStatus,
+  RunLifecycleState,
+  RunStatus,
+} from "./types";
 
 const RUNS_ROOT = join(".loop", "runs");
 const MANIFEST_FILE = "manifest.json";
 const TRANSCRIPT_FILE = "transcript.jsonl";
 const LINE_SPLIT_RE = /\r?\n/;
+const ACTIVE_RUN_STATES = new Set<RunLifecycleState>([
+  "submitted",
+  "working",
+  "reviewing",
+  "input-required",
+]);
+
+const isRunLifecycleState = (value: string): value is RunLifecycleState =>
+  value === "submitted" ||
+  value === "working" ||
+  value === "reviewing" ||
+  value === "input-required" ||
+  value === "completed" ||
+  value === "failed" ||
+  value === "stopped";
+
+const isReviewStatus = (value: string): value is ReviewStatus =>
+  value === "pass" || value === "fail";
+
 export interface RunStorage {
   manifestPath: string;
   repoId: string;
@@ -38,17 +63,51 @@ export interface RunManifest {
   pid: number;
   repoId: string;
   runId: string;
-  status: string;
+  state: RunLifecycleState;
+  status: RunStatus;
   tmuxSession?: string;
   updatedAt: string;
 }
 
-export interface RunTranscriptEntry {
+export interface RunMessageTranscriptEntry {
   at: string;
   from: string;
+  kind?: "message";
   message: string;
   to?: string;
 }
+
+export interface RunStatusTranscriptEntry {
+  at: string;
+  detail?: string;
+  kind: "status";
+  state: RunLifecycleState;
+}
+
+export interface RunReviewTranscriptEntry {
+  at: string;
+  kind: "review";
+  reason?: string;
+  reviewer: Agent;
+  status: ReviewStatus;
+}
+
+export interface RunResultTranscriptEntry {
+  at: string;
+  detail?: string;
+  kind: "result";
+  result:
+    | "done-signal-detected"
+    | "failed"
+    | "max-iterations-reached"
+    | "stopped";
+}
+
+export type RunTranscriptEntry =
+  | RunMessageTranscriptEntry
+  | RunResultTranscriptEntry
+  | RunReviewTranscriptEntry
+  | RunStatusTranscriptEntry;
 
 const RUN_INDEX_RE = /^\d+$/;
 
@@ -72,6 +131,7 @@ interface RunManifestInput {
   pid: number;
   repoId: string;
   runId: string;
+  state?: RunLifecycleState;
   status?: string;
   tmuxSession?: string;
   updatedAt?: string;
@@ -134,6 +194,61 @@ const trimToken = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 };
+
+export const parseRunLifecycleState = (
+  state: string | undefined,
+  status?: string
+): RunLifecycleState | undefined => {
+  if (state && isRunLifecycleState(state)) {
+    return state;
+  }
+  if (!status) {
+    return undefined;
+  }
+  if (isRunLifecycleState(status)) {
+    return status;
+  }
+  if (status === "active" || status === "running") {
+    return "working";
+  }
+  if (status === "done") {
+    return "completed";
+  }
+  if (status === "stopped") {
+    return "stopped";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return undefined;
+};
+
+export const runStatusFromState = (state: RunLifecycleState): RunStatus => {
+  if (state === "completed") {
+    return "done";
+  }
+  if (state === "failed") {
+    return "failed";
+  }
+  if (state === "stopped") {
+    return "stopped";
+  }
+  return "running";
+};
+
+export const isActiveRunState = (state: RunLifecycleState): boolean =>
+  ACTIVE_RUN_STATES.has(state);
+
+export const setRunManifestState = (
+  manifest: RunManifest,
+  state: RunLifecycleState,
+  now = new Date().toISOString()
+): RunManifest => ({
+  ...manifest,
+  state,
+  status: runStatusFromState(state),
+  updatedAt: now,
+});
 
 const gitText = (
   cwd: string,
@@ -329,26 +444,34 @@ export const updateRunManifest = (
 export const createRunManifest = (
   input: RunManifestInput,
   now = new Date().toISOString()
-): RunManifest => ({
-  claudeSessionId: input.claudeSessionId ?? "",
-  ...(input.codexRemoteUrl ? { codexRemoteUrl: input.codexRemoteUrl } : {}),
-  codexThreadId: input.codexThreadId ?? "",
-  createdAt: input.createdAt ?? now,
-  cwd: input.cwd,
-  mode: input.mode,
-  pid: input.pid,
-  repoId: input.repoId,
-  runId: validateRunId(input.runId),
-  status: input.status ?? "active",
-  ...(input.tmuxSession ? { tmuxSession: input.tmuxSession } : {}),
-  updatedAt: input.updatedAt ?? now,
-});
+): RunManifest => {
+  const state =
+    input.state ??
+    parseRunLifecycleState(undefined, input.status) ??
+    "submitted";
+  return {
+    claudeSessionId: input.claudeSessionId ?? "",
+    ...(input.codexRemoteUrl ? { codexRemoteUrl: input.codexRemoteUrl } : {}),
+    codexThreadId: input.codexThreadId ?? "",
+    createdAt: input.createdAt ?? now,
+    cwd: input.cwd,
+    mode: input.mode,
+    pid: input.pid,
+    repoId: input.repoId,
+    runId: validateRunId(input.runId),
+    state,
+    status: runStatusFromState(state),
+    ...(input.tmuxSession ? { tmuxSession: input.tmuxSession } : {}),
+    updatedAt: input.updatedAt ?? now,
+  };
+};
 
 export const touchRunManifest = (
   manifest: RunManifest,
   now = new Date().toISOString()
 ): RunManifest => ({
   ...manifest,
+  status: runStatusFromState(manifest.state),
   updatedAt: now,
 });
 
@@ -378,10 +501,12 @@ export const readRunManifest = (
     const repoId = firstString(parsed, ["repoId", "repo_id"]);
     const cwd = firstString(parsed, ["cwd"]);
     const mode = firstString(parsed, ["mode"]);
+    const rawState = firstString(parsed, ["state"]);
     const status = firstString(parsed, ["status"]);
     const createdAt = firstString(parsed, ["createdAt", "created_at"]);
     const updatedAt = firstString(parsed, ["updatedAt", "updated_at"]);
     const pid = firstInteger(parsed, ["pid"]);
+    const state = parseRunLifecycleState(rawState, status);
     if (!(runId && repoId)) {
       return undefined;
     }
@@ -391,7 +516,7 @@ export const readRunManifest = (
     if (!mode) {
       return undefined;
     }
-    if (!status) {
+    if (!(status || state)) {
       return undefined;
     }
     if (!createdAt) {
@@ -423,7 +548,8 @@ export const readRunManifest = (
       pid,
       repoId,
       runId,
-      status,
+      state: state ?? "working",
+      status: state ? runStatusFromState(state) : "running",
       ...(firstString(parsed, ["tmuxSession", "tmux_session"])
         ? {
             tmuxSession: firstString(parsed, ["tmuxSession", "tmux_session"]),
@@ -455,12 +581,149 @@ export const createRunTranscriptEntry = (
   message: string,
   to?: string,
   at = new Date().toISOString()
-): RunTranscriptEntry => ({
+): RunMessageTranscriptEntry => ({
   at,
   from,
   message,
   to,
 });
+
+export const createRunStatusEntry = (
+  state: RunLifecycleState,
+  detail?: string,
+  at = new Date().toISOString()
+): RunStatusTranscriptEntry => ({
+  at,
+  ...(detail ? { detail } : {}),
+  kind: "status",
+  state,
+});
+
+export const createRunReviewEntry = (
+  reviewer: Agent,
+  status: ReviewStatus,
+  reason?: string,
+  at = new Date().toISOString()
+): RunReviewTranscriptEntry => ({
+  at,
+  kind: "review",
+  ...(reason ? { reason } : {}),
+  reviewer,
+  status,
+});
+
+export const createRunResultEntry = (
+  result: RunResultTranscriptEntry["result"],
+  detail?: string,
+  at = new Date().toISOString()
+): RunResultTranscriptEntry => ({
+  at,
+  ...(detail ? { detail } : {}),
+  kind: "result",
+  result,
+});
+
+const parseStatusTranscriptEntry = (
+  parsed: Record<string, unknown>,
+  at: string
+): RunStatusTranscriptEntry | undefined => {
+  const state = parseRunLifecycleState(asString(parsed.state));
+  return state
+    ? {
+        at,
+        detail: asString(parsed.detail),
+        kind: "status",
+        state,
+      }
+    : undefined;
+};
+
+const parseReviewTranscriptEntry = (
+  parsed: Record<string, unknown>,
+  at: string
+): RunReviewTranscriptEntry | undefined => {
+  const reviewer =
+    parsed.reviewer === "claude" || parsed.reviewer === "codex"
+      ? parsed.reviewer
+      : undefined;
+  const status =
+    typeof parsed.status === "string" && isReviewStatus(parsed.status)
+      ? parsed.status
+      : undefined;
+  if (!(reviewer && status)) {
+    return undefined;
+  }
+  return {
+    at,
+    kind: "review",
+    reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
+    reviewer,
+    status,
+  };
+};
+
+const parseResultTranscriptEntry = (
+  parsed: Record<string, unknown>,
+  at: string
+): RunResultTranscriptEntry | undefined => {
+  const result = asString(parsed.result);
+  if (
+    !(
+      result === "done-signal-detected" ||
+      result === "failed" ||
+      result === "max-iterations-reached" ||
+      result === "stopped"
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    at,
+    detail: asString(parsed.detail),
+    kind: "result",
+    result,
+  };
+};
+
+const parseMessageTranscriptEntry = (
+  parsed: Record<string, unknown>,
+  at: string,
+  kind: string | undefined
+): RunMessageTranscriptEntry | undefined => {
+  const from = asString(parsed.from);
+  const message = asString(parsed.message);
+  if (!(from && message)) {
+    return undefined;
+  }
+  return {
+    at,
+    from,
+    kind: kind === "message" ? "message" : undefined,
+    message,
+    to: asString(parsed.to),
+  };
+};
+
+const parseRunTranscriptEntry = (
+  parsed: Record<string, unknown>
+): RunTranscriptEntry | undefined => {
+  const at = asString(parsed.at);
+  if (!at) {
+    return undefined;
+  }
+
+  const kind = asString(parsed.kind);
+  if (kind === "status") {
+    return parseStatusTranscriptEntry(parsed, at);
+  }
+  if (kind === "review") {
+    return parseReviewTranscriptEntry(parsed, at);
+  }
+  if (kind === "result") {
+    return parseResultTranscriptEntry(parsed, at);
+  }
+  return parseMessageTranscriptEntry(parsed, at, kind);
+};
 
 export const appendRunTranscriptEntry = (
   transcriptPath: string,
@@ -490,18 +753,10 @@ export const readRunTranscriptEntries = (
       if (!isRecord(parsed)) {
         continue;
       }
-      const at = asString(parsed.at);
-      const from = asString(parsed.from);
-      const message = asString(parsed.message);
-      if (!(at && from && message)) {
-        continue;
+      const entry = parseRunTranscriptEntry(parsed);
+      if (entry) {
+        entries.push(entry);
       }
-      entries.push({
-        at,
-        from,
-        message,
-        to: asString(parsed.to),
-      });
     } catch {
       // ignore malformed transcript lines
     }

@@ -16,8 +16,13 @@ import { runDraftPrStep } from "./pr";
 import { buildWorkPrompt } from "./prompts";
 import { createRunReviewWithPrompt, resolveReviewers } from "./review";
 import {
+  appendRunTranscriptEntry,
+  createRunResultEntry,
+  createRunReviewEntry,
+  createRunStatusEntry,
   type RunManifest,
   type RunStorage,
+  setRunManifestState,
   touchRunManifest,
   updateRunManifest,
   writeRunManifest,
@@ -32,6 +37,7 @@ import type {
   Options,
   ReviewFailure,
   ReviewMode,
+  RunLifecycleState,
   RunResult,
 } from "./types";
 import { hasSignal } from "./utils";
@@ -160,6 +166,42 @@ const updateIds = (state: PairedState): void => {
   writeRunManifest(state.storage.manifestPath, next);
 };
 
+const appendTranscript = (
+  state: PairedState,
+  entry:
+    | ReturnType<typeof createRunResultEntry>
+    | ReturnType<typeof createRunReviewEntry>
+    | ReturnType<typeof createRunStatusEntry>
+): void => {
+  appendRunTranscriptEntry(state.storage.transcriptPath, entry);
+};
+
+const transitionRunState = (
+  state: PairedState,
+  nextState: RunLifecycleState,
+  detail?: string
+): void => {
+  if (state.manifest.state === nextState && !detail) {
+    return;
+  }
+  const now = new Date().toISOString();
+  const next = setRunManifestState(
+    {
+      ...state.manifest,
+      claudeSessionId:
+        getLastClaudeSessionId() || state.manifest.claudeSessionId || "",
+      codexThreadId:
+        getLastCodexThreadId() || state.manifest.codexThreadId || "",
+      pid: process.pid,
+    },
+    nextState,
+    now
+  );
+  state.manifest = next;
+  writeRunManifest(state.storage.manifestPath, next);
+  appendTranscript(state, createRunStatusEntry(nextState, detail, now));
+};
+
 const nextResumeId = (state: PairedState, agent: Agent): string | undefined => {
   if (state.usedResume[agent]) {
     return undefined;
@@ -263,13 +305,72 @@ const startPair = async (state: PairedState): Promise<void> => {
       codexKind
     ),
   ]);
-  updateIds(state);
+  transitionRunState(state, "working", "paired sessions ready");
 };
 
 const createPairedReview = (state: PairedState) =>
   createRunReviewWithPrompt(reviewBridgePrompt, (reviewer, prompt, opts) =>
     runReviewerAgent(reviewer, prompt, opts, nextResumeId(state, reviewer))
   );
+
+const handleDoneSignal = async (
+  task: string,
+  state: PairedState,
+  reviewers: Agent[],
+  runReview: ReturnType<typeof createPairedReview>
+): Promise<{ done: boolean; reviewNotes: string }> => {
+  appendTranscript(
+    state,
+    createRunResultEntry("done-signal-detected", state.options.doneSignal)
+  );
+
+  if (reviewers.length === 0) {
+    transitionRunState(state, "completed", "done signal detected");
+    console.log(
+      `\n[loop] ${doneText(state.options.doneSignal)} detected, stopping.`
+    );
+    return { done: true, reviewNotes: "" };
+  }
+
+  transitionRunState(state, "reviewing", "review in progress");
+  const review = await runReview(reviewers, task, state.options);
+  updateIds(state);
+  for (const outcome of review.reviews) {
+    appendTranscript(
+      state,
+      createRunReviewEntry(outcome.reviewer, outcome.status, outcome.reason)
+    );
+  }
+  const reviewBridge = await drainBridge(state);
+  const selfReviewNotes = formatSelfReviewNotes(
+    review.failures,
+    state.options.agent
+  );
+  if (review.approved) {
+    transitionRunState(state, "completed", "review approved");
+    await runDraftPrStep(task, state.options);
+    console.log(
+      `\n[loop] ${doneText(state.options.doneSignal)} detected and review passed, stopping.`
+    );
+    return { done: true, reviewNotes: "" };
+  }
+  transitionRunState(state, "working", "review requested changes");
+
+  if (reviewBridge.deliveredToPrimary > 0) {
+    if (selfReviewNotes) {
+      console.log(
+        "\n[loop] reviewer feedback delivered through bridge; keeping self-review notes in the next prompt."
+      );
+      return { done: false, reviewNotes: selfReviewNotes };
+    }
+    console.log("\n[loop] reviewer feedback delivered through bridge.");
+    return { done: false, reviewNotes: "" };
+  }
+
+  const followUp = formatFollowUp(review);
+  console.log(followUp.log);
+  return { done: false, reviewNotes: followUp.notes };
+};
 
 const runIterations = async (
   task: string,
@@ -316,62 +417,50 @@ const runIterations = async (
     if (!hasSignal(output, doneSignal)) {
       continue;
     }
-
-    if (!shouldReview) {
-      console.log(`\n[loop] ${doneText(doneSignal)} detected, stopping.`);
-      return true;
-    }
-
-    const review = await runReview(reviewers, task, state.options);
-    updateIds(state);
-    const reviewBridge = await drainBridge(state);
-    const selfReviewNotes = formatSelfReviewNotes(
-      review.failures,
-      state.options.agent
+    const doneSignalResult = await handleDoneSignal(
+      task,
+      state,
+      shouldReview ? reviewers : [],
+      runReview
     );
-    if (review.approved) {
-      await runDraftPrStep(task, state.options);
-      console.log(
-        `\n[loop] ${doneText(doneSignal)} detected and review passed, stopping.`
-      );
+    if (doneSignalResult.done) {
       return true;
     }
-
-    if (reviewBridge.deliveredToPrimary > 0) {
-      if (selfReviewNotes) {
-        reviewNotes = selfReviewNotes;
-        console.log(
-          "\n[loop] reviewer feedback delivered through bridge; keeping self-review notes in the next prompt."
-        );
-      } else {
-        console.log("\n[loop] reviewer feedback delivered through bridge.");
-      }
-      continue;
-    }
-
-    const followUp = formatFollowUp(review);
-    reviewNotes = followUp.notes;
-    console.log(followUp.log);
+    reviewNotes = doneSignalResult.reviewNotes;
   }
 
   return false;
 };
 
-const finishRun = (state: PairedState, status: "done" | "stopped"): void => {
-  updateRunManifest(state.storage.manifestPath, (manifest) => {
-    const current = manifest ?? state.manifest;
-    return touchRunManifest(
+const finishRun = (
+  state: PairedState,
+  finalState: "completed" | "failed" | "stopped"
+): void => {
+  const previousState = state.manifest.state;
+  const next = updateRunManifest(state.storage.manifestPath, (manifest) => {
+    const currentManifest = manifest ?? state.manifest;
+    const touched = touchRunManifest(
       {
-        ...current,
+        ...currentManifest,
         claudeSessionId:
-          getLastClaudeSessionId() || current.claudeSessionId || "",
-        codexThreadId: getLastCodexThreadId() || current.codexThreadId || "",
+          getLastClaudeSessionId() || currentManifest.claudeSessionId || "",
+        codexThreadId:
+          getLastCodexThreadId() || currentManifest.codexThreadId || "",
         pid: process.pid,
-        status,
       },
       new Date().toISOString()
     );
+    return setRunManifestState(touched, finalState, touched.updatedAt);
   });
+  if (next) {
+    state.manifest = next;
+  }
+  if (previousState !== finalState) {
+    appendTranscript(state, createRunStatusEntry(finalState));
+  }
+  if (finalState === "failed" || finalState === "stopped") {
+    appendTranscript(state, createRunResultEntry(finalState));
+  }
 };
 
 export const runPairedLoop = async (
@@ -384,33 +473,44 @@ export const runPairedLoop = async (
     : undefined;
   const state = prepareRunState(opts, process.cwd());
   let loopTask = task;
-  let status: "done" | "stopped" = "stopped";
+  let finalState: "completed" | "failed" | "stopped" = "stopped";
 
   try {
+    appendTranscript(state, createRunStatusEntry(state.manifest.state));
     await startPair(state);
     while (true) {
       const done = await runIterations(loopTask, state, reviewers);
       if (done || !rl) {
         if (!done) {
+          appendTranscript(
+            state,
+            createRunResultEntry("max-iterations-reached")
+          );
           console.log(
             `\n[loop] reached max iterations (${opts.maxIterations}), stopping.`
           );
         }
-        status = done ? "done" : "stopped";
+        finalState = done ? "completed" : "stopped";
         return;
       }
+      appendTranscript(state, createRunResultEntry("max-iterations-reached"));
+      transitionRunState(state, "input-required", "awaiting follow-up prompt");
       console.log(`\n[loop] reached max iterations (${opts.maxIterations}).`);
       const answer = await rl.question(
         "\n[loop] follow-up prompt (blank to exit): "
       );
       if (!answer.trim()) {
-        status = "stopped";
+        finalState = "stopped";
         return;
       }
+      transitionRunState(state, "working", "follow-up prompt received");
       loopTask = `${loopTask}\n\nFollow-up:\n${answer.trim()}`;
     }
+  } catch (error) {
+    finalState = "failed";
+    throw error;
   } finally {
-    finishRun(state, status);
+    finishRun(state, finalState);
     rl?.close();
   }
 };

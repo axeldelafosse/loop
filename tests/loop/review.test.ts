@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { REVIEW_FAIL, REVIEW_PASS } from "../../src/loop/constants";
 import { createRunReview, resolveReviewers } from "../../src/loop/review";
-import type { Options, RunResult } from "../../src/loop/types";
+import type { Agent, Options, RunResult } from "../../src/loop/types";
 
 const makeRunResult = ({
   parsed = "",
@@ -23,6 +23,20 @@ const makeOptions = (overrides: Partial<Options> = {}): Options => ({
   review: "claudex",
   ...overrides,
 });
+
+const passReviews = (...reviewers: Agent[]) =>
+  reviewers.map((reviewer) => ({
+    reason: "",
+    reviewer,
+    status: "pass" as const,
+  }));
+
+const failReviews = (...reviews: Array<{ reason: string; reviewer: Agent }>) =>
+  reviews.map(({ reason, reviewer }) => ({
+    reason,
+    reviewer,
+    status: "fail" as const,
+  }));
 
 test("resolveReviewers returns empty list when review is not enabled", () => {
   expect(resolveReviewers(undefined, "codex")).toEqual([]);
@@ -50,6 +64,7 @@ test("runReview approves only when final line is a valid pass signal", async () 
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -67,6 +82,7 @@ test("runReview accepts quoted final signal and ignores non-final review lines",
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -84,6 +100,7 @@ test("runReview accepts final signal with surrounding whitespace", async () => {
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -104,6 +121,7 @@ test("runReview accepts final signal from combined output with trailing blank li
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -144,6 +162,11 @@ test("runReview accepts quoted final fail with whitespace-only body", async () =
     ],
     notes:
       '[codex] Reviewer requested more work. (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+    reviews: failReviews({
+      reason:
+        'Reviewer requested more work. (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+      reviewer: "codex",
+    }),
   });
 });
 
@@ -177,6 +200,7 @@ test("runReview accepts final signal when parsed is empty and combined contains 
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -330,6 +354,11 @@ test("runReview handles non-zero exit code as deterministic reviewer failure", a
     ],
     notes:
       '[codex] [loop] review exited with code 3 (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+    reviews: failReviews({
+      reason:
+        '[loop] review exited with code 3 (Expected "<review>PASS</review>" or "<review>FAIL</review>" in output.)',
+      reviewer: "codex",
+    }),
   });
 });
 
@@ -348,6 +377,10 @@ test("runReview handles reviewer runtime failures", async () => {
       },
     ],
     notes: "[codex] [loop] review codex failed: network glitch",
+    reviews: failReviews({
+      reason: "[loop] review codex failed: network glitch",
+      reviewer: "codex",
+    }),
   });
 });
 

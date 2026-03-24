@@ -74,6 +74,7 @@ interface BridgeStatus {
   codexThreadId: string;
   pending: { claude: number; codex: number };
   runId: string;
+  state: string;
   status: string;
   tmuxSession: string;
 }
@@ -278,6 +279,7 @@ const readBridgeStatus = (runDir: string): BridgeStatus => {
     codexThreadId: manifest?.codexThreadId ?? "",
     pending: countPendingMessages(runDir),
     runId: manifest?.runId ?? "",
+    state: manifest?.state ?? "unknown",
     status: manifest?.status ?? "unknown",
     tmuxSession: manifest?.tmuxSession ?? "",
   };

@@ -12,6 +12,13 @@ const makeOptions = (): Options => ({
   codexModel: "test-model",
 });
 
+const passReviews = (...reviewers: Agent[]) =>
+  reviewers.map((reviewer) => ({
+    reason: "",
+    reviewer,
+    status: "pass" as const,
+  }));
+
 const makeRunReview = (
   impl: (reviewer: Agent, prompt: string, opts: Options) => Promise<RunResult>
 ) => {
@@ -39,6 +46,7 @@ test("runReview approves when all reviewers pass", async () => {
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex", "claude"),
   });
   expect(runAgentMock).toHaveBeenCalledTimes(2);
 });
@@ -59,6 +67,7 @@ test("runReview ignores transport noise in combined when parsed has final pass s
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -138,6 +147,7 @@ test("runReview accepts quoted final review signal", async () => {
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex"),
   });
 });
 
@@ -204,6 +214,7 @@ test("runReview accepts pass signal from combined output with parsed body", asyn
     failureCount: 0,
     failures: [],
     notes: "",
+    reviews: passReviews("codex", "claude"),
   });
 });
 

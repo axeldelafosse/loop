@@ -2,6 +2,16 @@ export type Agent = "claude" | "codex";
 export type Format = "pretty" | "raw";
 export type ReviewMode = Agent | "claudex";
 export type PlanReviewMode = Agent | "other" | "none";
+export type ReviewStatus = "pass" | "fail";
+export type RunLifecycleState =
+  | "submitted"
+  | "working"
+  | "reviewing"
+  | "input-required"
+  | "completed"
+  | "failed"
+  | "stopped";
+export type RunStatus = "running" | "done" | "failed" | "stopped";
 export interface PairedSessionIds {
   claude?: string;
   codex?: string;
@@ -53,10 +63,15 @@ export interface ReviewFailure {
   reviewer: Agent;
 }
 
+export interface ReviewOutcome extends ReviewFailure {
+  status: ReviewStatus;
+}
+
 export interface ReviewResult {
   approved: boolean;
   consensusFail: boolean;
   failureCount: number;
   failures: ReviewFailure[];
   notes: string;
+  reviews: ReviewOutcome[];
 }

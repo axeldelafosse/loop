@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { file, spawn } from "bun";
+import { parseRunLifecycleState, runStatusFromState } from "./run-state";
 
 type Agent = "claude" | "codex";
 
@@ -54,6 +55,7 @@ interface LoopRunEntry {
   pid: number;
   repoId: string;
   runId: string;
+  state: string;
   status: string;
   updatedAtMs: number;
 }
@@ -571,6 +573,8 @@ const parseLoopRunManifest = (path: string): LoopRunEntry | undefined => {
     timestampFrom(manifest, "createdAt") ||
     timestampFrom(manifest, "created_at") ||
     fileTimestampMs(path);
+  const rawStatus = str(manifest, "status");
+  const state = parseRunLifecycleState(str(manifest, "state"), rawStatus);
 
   return {
     claudeSessionId:
@@ -584,7 +588,8 @@ const parseLoopRunManifest = (path: string): LoopRunEntry | undefined => {
     pid: numberFrom(manifest, "pid"),
     repoId: str(manifest, "repoId") || str(manifest, "repo_id") || ids.repoId,
     runId: str(manifest, "runId") || str(manifest, "run_id") || ids.runId,
-    status: str(manifest, "status") || "unknown",
+    state: state ?? "unknown",
+    status: (state ? runStatusFromState(state) : rawStatus) || "unknown",
     updatedAtMs: Number.isFinite(updatedAtMs)
       ? updatedAtMs
       : fileTimestampMs(path),
@@ -1101,7 +1106,7 @@ const stackedLoopRunLines = (entry: LoopRunEntry, width: number): string[] => {
   const available = Math.max(20, width);
   return [
     trimText(
-      `${entry.repoId}/${entry.runId} pid=${pidText(entry.pid)} status=${entry.status} mode=${entry.mode} updated=${ageFromMs(entry.updatedAtMs)}`,
+      `${entry.repoId}/${entry.runId} pid=${pidText(entry.pid)} status=${entry.status} state=${entry.state} mode=${entry.mode} updated=${ageFromMs(entry.updatedAtMs)}`,
       available
     ),
     `claude: ${trimText(entry.claudeSessionId, Math.max(1, available - 8))}`,

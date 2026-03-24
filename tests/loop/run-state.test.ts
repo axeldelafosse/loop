@@ -14,6 +14,9 @@ import {
   buildRunDir,
   buildTranscriptPath,
   createRunManifest,
+  createRunResultEntry,
+  createRunReviewEntry,
+  createRunStatusEntry,
   createRunTranscriptEntry,
   loadRunState,
   readRunManifest,
@@ -153,7 +156,7 @@ test("manifest helpers write, read, and touch run metadata", () => {
       pid: 1234,
       repoId: "repo-abc123",
       runId: "9",
-      status: "active",
+      state: "working",
     },
     "2026-03-22T10:00:00.000Z"
   );
@@ -223,7 +226,8 @@ test("loadRunState resolves an existing run by run id", () => {
     pid: 1234,
     repoId,
     runId: "7",
-    status: "active",
+    state: "working",
+    status: "running",
     updatedAt: "2026-03-22T11:00:00.000Z",
   });
   expect(state.transcript).toEqual([
@@ -334,6 +338,36 @@ test("transcript helpers append and read jsonl entries", () => {
 
   expect(readRunTranscriptEntries(transcriptPath)).toEqual([first, second]);
   expect(readFileSync(transcriptPath, "utf8")).toContain('"from":"claude"');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("transcript helpers parse structured status, review, and result entries", () => {
+  const dir = makeTempDir();
+  const transcriptPath = join(dir, "transcript.jsonl");
+  const entries = [
+    createRunStatusEntry(
+      "working",
+      "paired sessions ready",
+      "2026-03-22T10:00:00.000Z"
+    ),
+    createRunReviewEntry(
+      "codex",
+      "fail",
+      "Needs one more test.",
+      "2026-03-22T10:01:00.000Z"
+    ),
+    createRunResultEntry(
+      "done-signal-detected",
+      "<done/>",
+      "2026-03-22T10:02:00.000Z"
+    ),
+  ];
+
+  for (const entry of entries) {
+    appendRunTranscriptEntry(transcriptPath, entry);
+  }
+
+  expect(readRunTranscriptEntries(transcriptPath)).toEqual(entries);
   rmSync(dir, { recursive: true, force: true });
 });
 
