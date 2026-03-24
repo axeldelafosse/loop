@@ -1,5 +1,5 @@
 import { spawn } from "bun";
-import { AGENT_TURN_TIMEOUT_MS } from "./constants";
+import { AGENT_TURN_TIMEOUT_MS, LOOP_VERSION } from "./constants";
 import { findFreePort } from "./ports";
 import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Options, RunResult } from "./types";
@@ -236,6 +236,161 @@ const buildInput = (prompt: string): Record<string, unknown>[] => [
 const toError = (value: Error | unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
 
+const sendWsFrame = (
+  ws: import("./ws-client").WsClient,
+  payload: Record<string, unknown>
+): void => {
+  ws.send(`${JSON.stringify(payload)}\n`);
+};
+
+const sendWsResponse = (
+  ws: import("./ws-client").WsClient,
+  requestId: string,
+  result: unknown,
+  error: unknown
+): void => {
+  sendWsFrame(
+    ws,
+    error === undefined
+      ? { id: requestId, jsonrpc: "2.0", result }
+      : { id: requestId, error, jsonrpc: "2.0" }
+  );
+};
+
+const handleWsServerRequest = (
+  ws: import("./ws-client").WsClient,
+  requestId: string,
+  method: string
+): void => {
+  if (
+    method === METHOD_COMMAND_APPROVAL ||
+    method === METHOD_FILE_CHANGE_APPROVAL
+  ) {
+    sendWsResponse(ws, requestId, { decision: "accept" }, undefined);
+    return;
+  }
+  if (method === METHOD_TOOL_USER_INPUT) {
+    sendWsResponse(ws, requestId, { answers: {} }, undefined);
+    return;
+  }
+  if (
+    method === METHOD_TOOL_CALL ||
+    method === METHOD_APPLY_PATCH_APPROVAL ||
+    method === METHOD_EXEC_COMMAND_APPROVAL ||
+    method === METHOD_AUTH_REFRESH
+  ) {
+    sendWsResponse(ws, requestId, undefined, {
+      code: -32_601,
+      message: "request unsupported by loop bridge",
+    });
+    return;
+  }
+  sendWsResponse(ws, requestId, undefined, {
+    code: -32_601,
+    message: `unsupported request method ${method}`,
+  });
+};
+
+const createRemoteAppServerClient = async (
+  url: string
+): Promise<{
+  close(): void;
+  sendRequest(method: string, params: unknown): Promise<unknown>;
+}> => {
+  const ws = await connectWsFn(url);
+  let closed = false;
+  let requestId = 1;
+  const pending = new Map<string, PendingRequest>();
+
+  const failAll = (error: Error): void => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timeout);
+      request.reject(error);
+    }
+    pending.clear();
+  };
+
+  ws.onmessage = (data) => {
+    for (const line of data.split("\n")) {
+      const frame = parseLine(line);
+      if (!frame) {
+        continue;
+      }
+      const frameId = asRequestId(frame.id);
+      const method = asString(frame.method);
+      if (frameId && method) {
+        handleWsServerRequest(ws, frameId, method);
+        continue;
+      }
+      if (!frameId) {
+        continue;
+      }
+      const request = pending.get(frameId);
+      if (!request) {
+        continue;
+      }
+      clearTimeout(request.timeout);
+      pending.delete(frameId);
+      if (frame.error !== undefined) {
+        request.reject(
+          new Error(
+            parseErrorText(frame.error) ||
+              `codex app-server request "${request.method}" failed`
+          )
+        );
+        continue;
+      }
+      request.resolve(frame.result);
+    }
+  };
+
+  ws.onclose = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    failAll(new Error("codex app-server remote connection closed"));
+  };
+
+  return {
+    close: () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      ws.close();
+      failAll(new Error("codex app-server remote connection closed"));
+    },
+    sendRequest: (method: string, params: unknown): Promise<unknown> => {
+      if (closed) {
+        return Promise.reject(
+          new Error("codex app-server remote connection closed")
+        );
+      }
+      const nextRequestId = String(requestId++);
+      try {
+        sendWsFrame(ws, { id: nextRequestId, method, params });
+      } catch (error) {
+        return Promise.reject(
+          new Error(
+            `codex app-server request "${method}" failed to write: ${
+              toError(error).message
+            }`
+          )
+        );
+      }
+
+      return new Promise<unknown>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          pending.delete(nextRequestId);
+          reject(new Error(`codex app-server request "${method}" timed out`));
+        }, AGENT_TURN_TIMEOUT_MS);
+        pending.set(nextRequestId, { method, reject, resolve, timeout });
+      });
+    },
+  };
+};
+
 export class CodexAppServerFallbackError extends Error {}
 export class CodexAppServerUnexpectedExitError extends CodexAppServerFallbackError {}
 
@@ -263,6 +418,7 @@ export const codexAppServerInternals = {
 class AppServerClient {
   private child: ReturnType<typeof spawn> | undefined;
   private configValues: string[] = [];
+  private connectUrl = "";
   private ws: import("./ws-client").WsClient | undefined;
   private closed = false;
   private lastThreadId = "";
@@ -281,6 +437,10 @@ class AppServerClient {
 
   getLastThreadId(): string {
     return this.lastThreadId;
+  }
+
+  getConnectUrl(): string {
+    return this.connectUrl;
   }
 
   hasProcess(): boolean {
@@ -330,6 +490,7 @@ class AppServerClient {
       const port = await this.findPort();
       const listenUrl = `ws://0.0.0.0:${port}`;
       const connectUrl = `ws://127.0.0.1:${port}`;
+      this.connectUrl = connectUrl;
       const configArgs = this.configValues.flatMap((value) => ["-c", value]);
       const child = spawnFn(
         [APP_SERVER_CMD, ...configArgs, "app-server", "--listen", listenUrl],
@@ -385,6 +546,7 @@ class AppServerClient {
         killChildProcess(this.child, "SIGTERM");
         this.child = undefined;
       }
+      this.connectUrl = "";
       this.ready = false;
       this.started = false;
       throw new CodexAppServerFallbackError(
@@ -458,6 +620,7 @@ class AppServerClient {
     killChildProcess(this.child, "SIGTERM");
     await this.child.exited;
     this.child = undefined;
+    this.connectUrl = "";
     this.ready = false;
     this.started = false;
   }
@@ -941,6 +1104,7 @@ class AppServerClient {
 
   private handleUnexpectedExit(): void {
     this.child = undefined;
+    this.connectUrl = "";
     const ws = this.ws;
     this.ws = undefined;
     if (ws) {
@@ -1016,8 +1180,39 @@ export const interruptAppServer = (signal: ExitSignal): void => {
 
 export const hasAppServerProcess = (): boolean => getClient().hasProcess();
 
+export const getCodexAppServerUrl = (): string =>
+  singleton?.getConnectUrl() ?? "";
+
 export const getLastCodexThreadId = (): string =>
   singleton?.getLastThreadId() ?? "";
+
+export const injectCodexMessage = async (
+  remoteUrl: string,
+  threadId: string,
+  prompt: string
+): Promise<boolean> => {
+  if (!(remoteUrl && threadId && prompt.trim())) {
+    return false;
+  }
+  const client = await createRemoteAppServerClient(remoteUrl);
+  try {
+    await client.sendRequest(METHOD_INITIALIZE, {
+      clientInfo: {
+        name: "loop-bridge",
+        title: "loop-bridge",
+        version: LOOP_VERSION,
+      },
+      capabilities: { experimentalApi: true },
+    });
+    await client.sendRequest(METHOD_TURN_START, {
+      input: buildInput(prompt),
+      threadId,
+    });
+    return true;
+  } finally {
+    client.close();
+  }
+};
 
 export const closeAppServer = async (): Promise<void> => {
   if (!singleton) {

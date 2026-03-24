@@ -4,12 +4,21 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const loadBridge = () => {
+const loadBridge = (
+  overrides: {
+    injectCodexMessage?: (...args: string[]) => Promise<boolean>;
+  } = {}
+) => {
   mock.restore();
   mock.module("../../src/loop/launch", () => ({
     buildLaunchArgv: mock(() => ["/opt/bun", "src/loop/main.ts"]),
   }));
-  return import("../../src/loop/bridge");
+  if (overrides.injectCodexMessage) {
+    mock.module("../../src/loop/codex-app-server", () => ({
+      injectCodexMessage: overrides.injectCodexMessage,
+    }));
+  }
+  return import(`../../src/loop/bridge?test=${Date.now()}`);
 };
 
 const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-bridge-"));
@@ -17,6 +26,7 @@ const encodeFrame = (payload: unknown): string => {
   const body = JSON.stringify(payload);
   return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
 };
+const encodeLine = (payload: unknown): string => `${JSON.stringify(payload)}\n`;
 
 const runBridgeProcess = async (
   runDir: string,
@@ -239,6 +249,313 @@ test("bridge MCP send_to_agent queues a direct message through the CLI path", as
       .readBridgeEvents(runDir)
       .filter((event) => event.kind === "message")
   ).toHaveLength(1);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP handles standard empty-list and ping requests through the CLI path", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    [
+      encodeLine({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+        },
+      }),
+      encodeLine({
+        id: 2,
+        jsonrpc: "2.0",
+        method: "ping",
+        params: {},
+      }),
+      encodeLine({
+        id: 3,
+        jsonrpc: "2.0",
+        method: "prompts/list",
+        params: {},
+      }),
+      encodeLine({
+        id: 4,
+        jsonrpc: "2.0",
+        method: "resources/list",
+        params: {},
+      }),
+      encodeLine({
+        id: 5,
+        jsonrpc: "2.0",
+        method: "resources/templates/list",
+        params: {},
+      }),
+      encodeLine({
+        id: 6,
+        jsonrpc: "2.0",
+        method: "tools/list",
+        params: {},
+      }),
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain('"claude/channel":{}');
+  expect(result.stdout).toContain(
+    '\\"reply\\" tool and pass back the same chat_id'
+  );
+  expect(result.stdout).toContain('"id":2');
+  expect(result.stdout).toContain('"result":{}');
+  expect(result.stdout).toContain('"id":3');
+  expect(result.stdout).toContain('"prompts":[]');
+  expect(result.stdout).toContain('"id":4');
+  expect(result.stdout).toContain('"resources":[]');
+  expect(result.stdout).toContain('"id":5');
+  expect(result.stdout).toContain('"resourceTemplates":[]');
+  expect(result.stdout).toContain('"id":6');
+  expect(result.stdout).toContain('"name":"reply"');
+  expect(result.stdout).toContain('"name":"send_to_agent"');
+  expect(result.stdout).toContain('"name":"receive_messages"');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP writes line-delimited JSON responses", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    encodeLine({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+      },
+    })
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  const line = result.stdout.trim();
+  expect(line.startsWith("{")).toBe(true);
+  expect(JSON.parse(line)).toMatchObject({
+    id: 1,
+    jsonrpc: "2.0",
+    result: expect.objectContaining({
+      capabilities: expect.any(Object),
+      protocolVersion: "2024-11-05",
+    }),
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP receive_messages returns and clears queued inbox items", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    bridge.bridgeInternals.bridgePath(runDir),
+    `${JSON.stringify({
+      at: "2026-03-23T10:00:00.000Z",
+      id: "msg-1",
+      kind: "message",
+      message: "Please review the final result.",
+      source: "claude",
+      target: "codex",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    encodeLine({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {},
+        name: "receive_messages",
+      },
+    })
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("Please review the final result.");
+  expect(result.stdout).toContain('\\"from\\": \\"claude\\"');
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  expect(
+    bridge.bridgeInternals
+      .readBridgeEvents(runDir)
+      .filter((event) => event.kind === "delivered")
+  ).toHaveLength(1);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge delivers Claude replies directly to Codex when app-server state is available", async () => {
+  const injectCodexMessage = mock(async () => true);
+  const bridge = await loadBridge({ injectCodexMessage });
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  const message = {
+    at: "2026-03-23T10:01:00.000Z",
+    id: "msg-1",
+    kind: "message" as const,
+    message: "The files look good to me.",
+    source: "claude" as const,
+    target: "codex" as const,
+  };
+
+  bridge.bridgeInternals.appendBridgeEvent(runDir, message);
+  const delivered = await bridge.bridgeInternals.deliverCodexBridgeMessage(
+    runDir,
+    message
+  );
+
+  expect(delivered).toBe(true);
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "The files look good to me."
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  expect(
+    bridge.bridgeInternals
+      .readBridgeEvents(runDir)
+      .filter((event) => event.kind === "delivered")
+  ).toHaveLength(1);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge falls back to direct Codex delivery when the stored tmux session is stale", async () => {
+  const injectCodexMessage = mock(async () => true);
+  const bridge = await loadBridge({ injectCodexMessage });
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  const message = {
+    at: "2026-03-23T10:01:00.000Z",
+    id: "msg-2",
+    kind: "message" as const,
+    message: "Please review the final state.",
+    source: "claude" as const,
+    target: "codex" as const,
+  };
+
+  bridge.bridgeInternals.appendBridgeEvent(runDir, message);
+  const delivered = await bridge.bridgeInternals.deliverCodexBridgeMessage(
+    runDir,
+    message
+  );
+
+  expect(delivered).toBe(true);
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "Please review the final state."
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP delivers pending codex messages to Claude as channel notifications", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  writeFileSync(
+    bridge.bridgeInternals.bridgePath(runDir),
+    `${JSON.stringify({
+      at: "2026-03-23T10:00:00.000Z",
+      id: "msg-1",
+      kind: "message",
+      message: "Please review the latest Codex output.",
+      source: "codex",
+      target: "claude",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    [
+      encodeLine({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+        },
+      }),
+      encodeLine({
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      }),
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain('"method":"notifications/claude/channel"');
+  expect(result.stdout).toContain("Please review the latest Codex output.");
+  expect(result.stdout).toContain('"user":"Codex"');
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  expect(
+    bridge.bridgeInternals
+      .readBridgeEvents(runDir)
+      .filter((event) => event.kind === "delivered")
+  ).toHaveLength(1);
+
   rmSync(root, { recursive: true, force: true });
 });
 

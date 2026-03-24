@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { preparePairedOptions } from "../../src/loop/paired-options";
+import {
+  preparePairedOptions,
+  preparePairedRun,
+} from "../../src/loop/paired-options";
 import {
   createRunManifest,
   readRunManifest,
@@ -94,6 +97,58 @@ test("preparePairedOptions ignores stored session ids from a completed paired ru
 
     expect(process.env.LOOP_RUN_ID).toBe("alpha");
     expect(opts.pairedSessionIds).toBeUndefined();
+  } finally {
+    if (originalHome === undefined) {
+      Reflect.deleteProperty(process.env, "HOME");
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalRunId === undefined) {
+      Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+    } else {
+      process.env.LOOP_RUN_ID = originalRunId;
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("preparePairedRun clears a stale tmux session outside tmux mode", () => {
+  const home = makeTempHome();
+  const originalHome = process.env.HOME;
+  const originalRunId = process.env.LOOP_RUN_ID;
+  process.env.HOME = home;
+  Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+
+  try {
+    const storage = resolveRunStorage("alpha", process.cwd(), home);
+    writeRunManifest(
+      storage.manifestPath,
+      createRunManifest(
+        {
+          claudeSessionId: "claude-session-1",
+          codexRemoteUrl: "ws://127.0.0.1:4500",
+          codexThreadId: "codex-thread-1",
+          cwd: process.cwd(),
+          mode: "paired",
+          pid: 1234,
+          repoId: storage.repoId,
+          runId: "alpha",
+          status: "running",
+          tmuxSession: "repo-loop-alpha",
+        },
+        "2026-03-22T10:00:00.000Z"
+      )
+    );
+    const opts = makeOptions({ resumeRunId: "alpha", tmux: false });
+
+    const prepared = preparePairedRun(opts, process.cwd());
+
+    expect(prepared.manifest.tmuxSession).toBeUndefined();
+    expect(prepared.manifest.codexRemoteUrl).toBe("ws://127.0.0.1:4500");
+    expect(readRunManifest(storage.manifestPath)?.tmuxSession).toBeUndefined();
+    expect(readRunManifest(storage.manifestPath)?.codexRemoteUrl).toBe(
+      "ws://127.0.0.1:4500"
+    );
   } finally {
     if (originalHome === undefined) {
       Reflect.deleteProperty(process.env, "HOME");

@@ -9,16 +9,13 @@ import {
   logIterationHeader,
 } from "./iteration";
 import {
-  applyPairedOptions,
-  canResumePairedManifest,
   preparePairedOptions as preparePairedOptionsImpl,
-  resolvePreparedRunState,
+  preparePairedRun,
 } from "./paired-options";
 import { runDraftPrStep } from "./pr";
 import { buildWorkPrompt } from "./prompts";
 import { createRunReviewWithPrompt, resolveReviewers } from "./review";
 import {
-  createRunManifest,
   type RunManifest,
   type RunStorage,
   touchRunManifest,
@@ -92,11 +89,12 @@ const bridgeGuidance = (agent: Agent): string => {
     "Paired mode:",
     `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want ${peer} to act, review, or answer.`,
     'Do not ask the human to relay messages between agents. Use "bridge_status" if you need the current bridge state.',
+    'If "bridge_status" shows pending messages addressed to you, call "receive_messages" to read them.',
   ].join("\n");
 };
 
 const bridgeToolGuidance = [
-  'You can use the MCP tools "send_to_agent" and "bridge_status" for direct Claude/Codex coordination.',
+  'You can use the MCP tools "send_to_agent", "bridge_status", and "receive_messages" for direct Claude/Codex coordination.',
   "Do not ask the human to relay messages between agents.",
 ].join("\n");
 
@@ -236,40 +234,7 @@ const drainBridge = async (
 };
 
 const prepareRunState = (opts: Options, cwd: string): PairedState => {
-  const {
-    allowRawSessionFallback,
-    manifest: existing,
-    storage,
-  } = resolvePreparedRunState(opts, cwd);
-  applyPairedOptions(opts, storage, existing, allowRawSessionFallback);
-  const resumable = canResumePairedManifest(existing) ? existing : undefined;
-  const manifest = existing
-    ? touchRunManifest(
-        {
-          ...existing,
-          claudeSessionId:
-            resumable?.claudeSessionId || opts.pairedSessionIds?.claude || "",
-          codexThreadId:
-            resumable?.codexThreadId || opts.pairedSessionIds?.codex || "",
-          cwd,
-          mode: "paired",
-          pid: process.pid,
-          status: "running",
-        },
-        new Date().toISOString()
-      )
-    : createRunManifest({
-        claudeSessionId: opts.pairedSessionIds?.claude ?? "",
-        codexThreadId: opts.pairedSessionIds?.codex ?? "",
-        cwd,
-        mode: "paired",
-        pid: process.pid,
-        repoId: storage.repoId,
-        runId: storage.runId,
-        status: "running",
-      });
-  writeRunManifest(storage.manifestPath, manifest);
-
+  const { manifest, storage } = preparePairedRun(opts, cwd);
   return {
     manifest,
     options: opts,

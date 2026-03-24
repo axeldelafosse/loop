@@ -146,6 +146,7 @@ test("manifest helpers write, read, and touch run metadata", () => {
   const manifest = createRunManifest(
     {
       claudeSessionId: "claude-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
       codexThreadId: "codex-1",
       cwd: "/repo",
       mode: "paired",

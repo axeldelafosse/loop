@@ -28,6 +28,7 @@ interface TestProcess {
 
 type ResponseWriter = (frame: Record<string, unknown>) => void;
 type RequestHandler = (request: RequestFrame, write: ResponseWriter) => void;
+const LOCAL_WS_URL_RE = /^ws:\/\/127\.0\.0\.1:\d+$/;
 
 const noopRequestHandler: RequestHandler = () => {
   // noop
@@ -250,6 +251,21 @@ test("startAppServer forwards config overrides into the app-server command", asy
     "--listen",
   ]);
   expect(lastSpawnCommand[5]).toContain("ws://0.0.0.0:");
+});
+
+test("startAppServer exposes the app-server websocket URL", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  await appServer.startAppServer();
+  expect(appServer.getCodexAppServerUrl()).toMatch(LOCAL_WS_URL_RE);
+
+  await appServer.closeAppServer();
+  expect(appServer.getCodexAppServerUrl()).toBe("");
 });
 
 test("startAppServer normalizes codex bridge config args before spawning", async () => {
