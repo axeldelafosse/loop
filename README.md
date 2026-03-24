@@ -1,6 +1,6 @@
 # loop
 
-Dead-simple Bun CLI that runs `codex` and `claude` in a loop. Use `--tmux` to run the interactive TUIs side-by-side. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
+Dead-simple Bun CLI that runs `codex` and `claude` in a loop. `loop` now starts the interactive paired tmux workspace by default, and `loop dashboard` opens the live panel. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
 
 Install:
 ```bash
@@ -64,12 +64,9 @@ Installer currently supports macOS and Linux and installs `loop`, `claude-loop`,
 ./loop.ts --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
 # start paired interactive tmux workspace with no task yet
-./loop.ts --tmux
-
-# open live panel of running claude/codex instances
 ./loop.ts
 
-# same panel explicitly
+# open live panel of running claude/codex instances
 ./loop.ts dashboard
 
 # build executable
@@ -77,12 +74,9 @@ bun run build
 ./loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes"
 
 # start paired interactive tmux workspace with no task yet
-./loop --tmux
-
-# same live panel behavior on built binary
 ./loop
 
-# same panel explicitly
+# open live panel explicitly
 ./loop dashboard
 ```
 
@@ -91,9 +85,10 @@ Some notes:
 - Default mode is paired: `--agent` selects the primary worker and the other model stays available as reviewer/support.
 - You can pass prompt text positionally (`loop "Implement {feature}"`) or via `--prompt`.
 - `--proof` is strongly recommended for autonomous task runs and should describe how to prove the task works (tests, commands, and checks to run). Be specific.
-- `loop --tmux` with no prompt and no proof starts a paired interactive tmux workspace and waits for you to provide the first task in the TUIs.
+- Running with no args starts the same paired interactive tmux workspace as `loop --tmux` and waits for you to provide the first task in the TUIs.
+- `loop --tmux` still works explicitly and behaves the same as the default `loop` command.
 - If the input is plain text (not a `.md` path), `loop` first runs a planning step to create `PLAN.md`, then uses `PLAN.md` for the main loop.
-- Running with no args opens the live panel for active sessions, recent paired runs, and tmux sessions. `loop dashboard` does the same thing explicitly.
+- `loop dashboard` opens the live panel for active sessions, recent paired runs, and tmux sessions.
 - If no prompt is provided and options are present, `loop` will use `PLAN.md` if it exists.
 
 ## Paired mode and resume
@@ -188,7 +183,7 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 
 ```bash
 # start paired interactive tmux workspace with no task yet
-loop --tmux
+loop
 
 # open the live dashboard explicitly
 loop dashboard

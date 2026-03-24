@@ -130,8 +130,11 @@ const loadRunCli = async (
   };
 };
 
-test("runCli starts panel when argv is empty", async () => {
+test("runCli defaults empty argv to paired interactive tmux mode", async () => {
+  const opts = { ...makeOptions(), proof: "", tmux: true };
   const {
+    closeAppServerMock,
+    closeClaudeSdkMock,
     maybeEnterWorktreeMock,
     parseArgsMock,
     resolveTaskMock,
@@ -139,16 +142,23 @@ test("runCli starts panel when argv is empty", async () => {
     runInTmuxMock,
     runLoopMock,
     runPanelMock,
-  } = await loadRunCli();
+  } = await loadRunCli({
+    parseArgs: () => opts,
+    runInTmux: () => true,
+  });
 
   await runCli([]);
 
-  expect(runPanelMock).toHaveBeenCalledTimes(1);
-  expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
-  expect(runInTmuxMock).not.toHaveBeenCalled();
-  expect(parseArgsMock).not.toHaveBeenCalled();
+  expect(runPanelMock).not.toHaveBeenCalled();
+  expect(parseArgsMock).toHaveBeenCalledWith(["--tmux"]);
+  expect(maybeEnterWorktreeMock).toHaveBeenCalledTimes(1);
+  expect(runInTmuxMock).toHaveBeenCalledWith(["--tmux"], undefined, {
+    opts,
+  });
   expect(resolveTaskMock).not.toHaveBeenCalled();
   expect(runLoopMock).not.toHaveBeenCalled();
+  expect(closeAppServerMock).not.toHaveBeenCalled();
+  expect(closeClaudeSdkMock).not.toHaveBeenCalled();
 });
 
 test("runCli starts panel for dashboard command", async () => {

@@ -17,6 +17,7 @@ import { updateDeps } from "./loop/update-deps";
 
 const TMUX_DETACH_HINT = "[loop] detach with Ctrl-b d";
 const DASHBOARD_COMMAND = "dashboard";
+const DEFAULT_TMUX_ARGV = ["--tmux"];
 const INTERACTIVE_TMUX_ERROR =
   "[loop] interactive paired tmux mode must be started outside tmux.";
 
@@ -72,8 +73,9 @@ export const runCli = async (argv: string[]): Promise<void> => {
 
   let shouldCloseAgents = true;
   try {
+    const normalizedArgv = argv.length === 0 ? DEFAULT_TMUX_ARGV : argv;
     await updateDeps.applyStagedUpdateOnStartup();
-    if (await updateDeps.handleManualUpdateCommand(argv)) {
+    if (await updateDeps.handleManualUpdateCommand(normalizedArgv)) {
       return;
     }
     updateDeps.startAutoUpdateCheck();
@@ -81,16 +83,16 @@ export const runCli = async (argv: string[]): Promise<void> => {
     if (process.env.TMUX) {
       console.log(TMUX_DETACH_HINT);
     }
-    if (argv.length === 0) {
+    if (normalizedArgv[0]?.toLowerCase() === DASHBOARD_COMMAND) {
       await cliDeps.runPanel();
       return;
     }
-    if (argv[0]?.toLowerCase() === DASHBOARD_COMMAND) {
-      await cliDeps.runPanel();
-      return;
-    }
-    const opts = cliDeps.parseArgs(argv);
-    if (opts.tmux && !opts.pairedMode && (await cliDeps.runInTmux(argv))) {
+    const opts = cliDeps.parseArgs(normalizedArgv);
+    if (
+      opts.tmux &&
+      !opts.pairedMode &&
+      (await cliDeps.runInTmux(normalizedArgv))
+    ) {
       shouldCloseAgents = false;
       return;
     }
@@ -105,7 +107,7 @@ export const runCli = async (argv: string[]): Promise<void> => {
       !opts.promptInput?.trim() &&
       !opts.proof.trim()
     ) {
-      if (await cliDeps.runInTmux(argv, undefined, { opts })) {
+      if (await cliDeps.runInTmux(normalizedArgv, undefined, { opts })) {
         shouldCloseAgents = false;
         return;
       }
@@ -115,7 +117,7 @@ export const runCli = async (argv: string[]): Promise<void> => {
     if (
       opts.tmux &&
       opts.pairedMode &&
-      (await cliDeps.runInTmux(argv, undefined, { opts, task }))
+      (await cliDeps.runInTmux(normalizedArgv, undefined, { opts, task }))
     ) {
       shouldCloseAgents = false;
       return;

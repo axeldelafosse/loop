@@ -11,7 +11,7 @@ export const HELP = `
 loop - v${LOOP_VERSION} - meta agent loop runner
 
 Usage:
-  loop                                     Open live panel for running claude/codex instances
+  loop                                     Start paired interactive tmux mode
   loop dashboard                           Open live panel for running claude/codex instances
   loop [options] [prompt]
   loop update                              Check for updates and apply if available
