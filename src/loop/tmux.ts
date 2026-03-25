@@ -125,7 +125,7 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
 const pairedBridgeGuidance = (agent: Agent): string => {
   if (agent === "claude") {
     return [
-      "Paired mode:",
+      "Agent-to-agent pair programming:",
       "You are in a persistent Claude/Codex pair.",
       'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
       'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
@@ -134,7 +134,7 @@ const pairedBridgeGuidance = (agent: Agent): string => {
   }
 
   return [
-    "Paired mode:",
+    "Agent-to-agent pair programming:",
     'You are in a persistent Claude/Codex pair. Message Claude with "send_to_agent", not a human-facing message.',
     'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
   ].join("\n");
@@ -166,7 +166,7 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
 const buildPrimaryPrompt = (task: string, opts: Options): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming. You are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
     `Your peer is ${peer}. Do the initial pass yourself, then use "send_to_agent" when you want review or targeted help from ${peer}.`,
   ];
@@ -183,7 +183,7 @@ const buildPrimaryPrompt = (task: string, opts: Options): string => {
 const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Paired tmux mode. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming. ${primary} is the primary agent for this run.`,
     `Task:\n${task.trim()}`,
     `You are ${capitalize(agent)}. Do not start implementing or verifying this task on your own.`,
   ];
@@ -199,9 +199,9 @@ const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
 const buildInteractivePrimaryPrompt = (opts: Options): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming. You are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" for review or help once the human gives you a task.`,
+    `Your peer is ${peer}. Use "send_to_agent" for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(
@@ -218,7 +218,7 @@ const buildInteractivePrimaryPrompt = (opts: Options): string => {
 const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Paired tmux mode. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming. ${primary} is the primary agent for this run.`,
     "No task has been assigned yet.",
     `You are ${capitalize(agent)}. Stay idle until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];

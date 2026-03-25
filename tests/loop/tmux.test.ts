@@ -511,6 +511,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
     "claude"
   );
 
+  expect(primaryPrompt).toContain("Agent-to-agent pair programming");
   expect(primaryPrompt).toContain("You are the main worker.");
   expect(primaryPrompt).toContain(
     "your own review and the peer review both pass"
@@ -537,6 +538,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(opts);
   const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(opts, "claude");
 
+  expect(primaryPrompt).toContain("Agent-to-agent pair programming");
   expect(primaryPrompt).toContain("No task has been assigned yet.");
   expect(primaryPrompt).toContain("Wait for the first human task");
   expect(primaryPrompt).toContain(
