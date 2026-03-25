@@ -50,7 +50,7 @@ python3 .agents/skills/clean-vm/scripts/clean_vm.py --apply --browsers
 
 - repo identity via `git rev-parse --git-common-dir`, using the same repo id scheme as loop
 - run manifests under `~/.loop/runs`
-- tmux liveness with `tmux has-session -t <name>`
+- tmux liveness with exact session targets like `tmux has-session -t =<name>` plus a live-pane check from `tmux list-panes`
 - helper processes whose command line references a stale run dir
 - dev servers matching `next dev`, `next-server`, `storybook`, or `start-storybook`
 - worktrees from `git worktree list --porcelain`
@@ -72,7 +72,7 @@ Useful loop states:
 - active: `submitted`, `working`, `reviewing`, `input-required`
 - inactive: `completed`, `failed`, `stopped`
 
-If a manifest claims to be active but both the `pid` and `tmuxSession` are gone, treat it as stale.
+If a manifest claims to be active but its `pid` is gone and its exact tmux session is missing or every pane in that exact session is dead, treat it as stale.
 
 ## Report
 

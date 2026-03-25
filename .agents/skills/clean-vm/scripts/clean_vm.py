@@ -114,10 +114,43 @@ def pid_exists(pid: Optional[int]) -> bool:
     return True
 
 
+def exact_tmux_target(session: str) -> str:
+    return f"={session}"
+
+
 def tmux_session_exists(session: str) -> bool:
     if not session:
         return False
-    return run_command(["tmux", "has-session", "-t", session]).returncode == 0
+    return (
+        run_command(["tmux", "has-session", "-t", exact_tmux_target(session)]).returncode
+        == 0
+    )
+
+
+def tmux_session_has_live_panes(session: str) -> bool:
+    if not tmux_session_exists(session):
+        return False
+    result = run_command(
+        [
+            "tmux",
+            "list-panes",
+            "-t",
+            exact_tmux_target(session),
+            "-F",
+            "#{pane_dead} #{pane_pid}",
+        ]
+    )
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or parts[0] != "0":
+            continue
+        if not parts[1].isdigit():
+            return True
+        if pid_exists(int(parts[1])):
+            return True
+    return False
 
 
 def parse_int(value: object) -> Optional[int]:
@@ -235,7 +268,7 @@ def load_runs(context: RepoContext) -> tuple[list[RunInfo], list[str]]:
                 state=normalize_run_state(
                     parse_string(data.get("state") or data.get("status")) or "unknown"
                 ),
-                tmux_alive=tmux_session_exists(tmux_session),
+                tmux_alive=tmux_session_has_live_panes(tmux_session),
                 tmux_session=tmux_session,
             )
         )
@@ -293,7 +326,7 @@ def classify_worktrees(
         if any(is_inside(worktree.path, path) for path in tmux_paths):
             notes.append(f"kept worktree open in tmux {worktree.path}")
             continue
-        if tmux_session_exists(worktree.path.name):
+        if tmux_session_has_live_panes(worktree.path.name):
             notes.append(f"kept tmux-backed worktree {worktree.path}")
             continue
         if worktree.prunable:
