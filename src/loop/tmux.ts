@@ -126,11 +126,10 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
 
 const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
   const serverName = buildClaudeChannelServerName(runId);
-  const prefix = `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`;
 
   if (agent === "claude") {
     return [
-      prefix,
+      `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
       'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
       'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
       'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
