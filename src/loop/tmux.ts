@@ -128,16 +128,14 @@ const pairedBridgeGuidance = (agent: Agent): string => {
       "Paired mode:",
       "You are in a persistent Claude/Codex pair.",
       'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
-      'Use "send_to_agent" only for new proactive messages to Codex.',
-      "Do not route messages through the human or answer the human while Codex is waiting on you.",
+      'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
       'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
     ].join("\n");
   }
 
   return [
     "Paired mode:",
-    'You are in a persistent Claude/Codex pair. Use "send_to_agent" when you want Claude to act, review, or answer.',
-    "Do not route messages through the human.",
+    'You are in a persistent Claude/Codex pair. Message Claude with "send_to_agent", not a human-facing message.',
     'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
   ].join("\n");
 };
