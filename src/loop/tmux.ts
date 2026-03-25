@@ -36,6 +36,9 @@ const RUN_BASE_ENV = "LOOP_RUN_BASE";
 const RUN_ID_ENV = "LOOP_RUN_ID";
 const CLAUDE_TRUST_PROMPT = "Is this a project you created or one you trust?";
 const CLAUDE_BYPASS_PROMPT = "running in Bypass Permissions mode";
+const CLAUDE_BYPASS_MODE = "Bypass Permissions mode";
+const CLAUDE_BYPASS_ACCEPT = "Yes, I accept";
+const CLAUDE_EXIT_OPTION = "No, exit";
 const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
 const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
 const CLAUDE_CHANNEL_SCOPE = "local";
@@ -700,16 +703,25 @@ const runTmuxCommand = (
   throw new Error(`${message}${suffix}`);
 };
 
+const normalizePaneText = (text: string): string =>
+  text.replace(/\s+/g, " ").trim();
+
 const detectClaudePrompt = (text: string): "bypass" | "confirm" | undefined => {
-  if (text.includes(CLAUDE_BYPASS_PROMPT)) {
+  const normalized = normalizePaneText(text);
+  if (
+    normalized.includes(CLAUDE_BYPASS_PROMPT) ||
+    (normalized.includes(CLAUDE_BYPASS_MODE) &&
+      normalized.includes(CLAUDE_BYPASS_ACCEPT) &&
+      normalized.includes(CLAUDE_EXIT_OPTION))
+  ) {
     return "bypass";
   }
-  if (text.includes(CLAUDE_TRUST_PROMPT)) {
+  if (normalized.includes(CLAUDE_TRUST_PROMPT)) {
     return "confirm";
   }
   if (
-    text.includes(CLAUDE_DEV_CHANNELS_PROMPT) &&
-    text.includes(CLAUDE_DEV_CHANNELS_CONFIRM)
+    normalized.includes(CLAUDE_DEV_CHANNELS_PROMPT) &&
+    normalized.includes(CLAUDE_DEV_CHANNELS_CONFIRM)
   ) {
     return "confirm";
   }
@@ -740,7 +752,9 @@ const unblockClaudePane = async (
       continue;
     }
     if (prompt === "bypass") {
-      deps.sendKeys(pane, ["Down", "Enter"]);
+      deps.sendKeys(pane, ["Down"]);
+      await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
+      deps.sendKeys(pane, ["Enter"]);
       handledPrompt = true;
       quietPolls = 0;
       await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);

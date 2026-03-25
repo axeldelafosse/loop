@@ -665,7 +665,11 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
 
   expect(keyCalls[0]).toEqual({ keys: ["Enter"], pane: "repo-loop-1:0.0" });
   expect(keyCalls[1]).toEqual({
-    keys: ["Down", "Enter"],
+    keys: ["Down"],
+    pane: "repo-loop-1:0.0",
+  });
+  expect(keyCalls[2]).toEqual({
+    keys: ["Enter"],
     pane: "repo-loop-1:0.0",
   });
   expect(
@@ -694,6 +698,176 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildPrimaryPrompt("Ship feature", opts, "1")
   );
+});
+
+test("runInTmux confirms wrapped Claude dev-channel prompts", async () => {
+  const keyCalls: Array<{ keys: string[]; pane: string }> = [];
+  let sessionStarted = false;
+  let pollCount = 0;
+  const devChannelsPrompt = [
+    "WARNING: Loading development channels",
+    "",
+    "--dangerously-load-development-channels is for local channel development only.",
+    "",
+    "1. I am using this for local",
+    "development",
+  ].join("\n");
+  const manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => {
+        pollCount += 1;
+        if (pollCount === 1) {
+          return devChannelsPrompt;
+        }
+        return "";
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (pane: string, keys: string[]) => {
+        keyCalls.push({ keys, pane });
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => update(manifest),
+    },
+    { opts: makePairedOptions(), task: "Ship feature" }
+  );
+
+  expect(keyCalls).toContainEqual({
+    keys: ["Enter"],
+    pane: "repo-loop-1:0.0",
+  });
+});
+
+test("runInTmux confirms the current Claude bypass prompt wording", async () => {
+  const keyCalls: Array<{ keys: string[]; pane: string }> = [];
+  let sessionStarted = false;
+  let pollCount = 0;
+  const bypassPrompt = [
+    "Bypass Permissions mode",
+    "",
+    "1. No, exit",
+    "2. Yes, I accept",
+  ].join("\n");
+  const manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => {
+        pollCount += 1;
+        if (pollCount === 1) {
+          return bypassPrompt;
+        }
+        return "";
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (pane: string, keys: string[]) => {
+        keyCalls.push({ keys, pane });
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => update(manifest),
+    },
+    { opts: makePairedOptions(), task: "Ship feature" }
+  );
+
+  expect(keyCalls).toContainEqual({
+    keys: ["Down"],
+    pane: "repo-loop-1:0.0",
+  });
+  expect(keyCalls).toContainEqual({
+    keys: ["Enter"],
+    pane: "repo-loop-1:0.0",
+  });
 });
 
 test("runInTmux still confirms Claude trust prompts in paired mode", async () => {
@@ -1574,6 +1748,25 @@ test("tmux internals build shell command with escaping", () => {
   expect(tmuxInternals.buildShellCommand(["loop", "--prompt", "a'b c"])).toBe(
     "'loop' '--prompt' 'a'\\''b c'"
   );
+});
+
+test("tmux internals launch Claude in bypass mode", () => {
+  expect(
+    tmuxInternals.buildClaudeCommand(
+      "claude-session-1",
+      "opus",
+      "loop-bridge-1",
+      false
+    )
+  ).toContain("--dangerously-skip-permissions");
+  expect(
+    tmuxInternals.buildClaudeCommand(
+      "claude-session-1",
+      "opus",
+      "loop-bridge-1",
+      false
+    )
+  ).not.toContain("--permission-mode");
 });
 
 test("tmux internals build run names", () => {
