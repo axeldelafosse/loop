@@ -1,146 +1,78 @@
 ---
 name: clean-vm
-description: Safely clean a local development VM when repeated loop, Claude, or Codex runs leave behind stale tmux sessions, orphaned agent processes, inactive Next.js or Storybook servers, closed-browser clutter, or unused git worktrees. Use this skill for machine cleanup, port/process triage, and reclaiming loop-created worktrees without disrupting active work.
+description: "Safely clean the local loop VM by reporting and removing stale loop runs, inactive Next.js or Storybook servers, optional browser windows, and unused loop-created worktrees without disturbing active tmux-backed sessions."
 ---
 
 # Clean VM
 
-Use this skill when the machine has stale local dev state and you need a careful cleanup pass.
-Prefer proving an item is inactive over killing it by name.
+Use this skill when repeated loop, Claude, or Codex runs leave the machine in a bad state.
+Start with the bundled script. It does a dry run by default and only mutates the machine with `--apply`.
+
+## Default Workflow
+
+1. Run a dry run first:
+
+```bash
+python3 .agents/skills/clean-vm/scripts/clean_vm.py
+```
+
+2. Review the report. The script only targets:
+
+- loop manifests under `~/.loop/runs/<repoId>`
+- loop helper processes tied to stale run dirs
+- Next.js and Storybook servers running inside stale loop worktrees
+- loop-created worktrees from `git worktree list --porcelain`
+
+3. Apply the cleanup once the plan looks safe:
+
+```bash
+python3 .agents/skills/clean-vm/scripts/clean_vm.py --apply
+```
+
+4. Only close browser windows when the user explicitly wants browser cleanup:
+
+```bash
+python3 .agents/skills/clean-vm/scripts/clean_vm.py --apply --browsers
+```
 
 ## Safety Rules
 
-- Start with detection. Do not kill or remove anything until you can explain why it is stale.
-- Treat loop manifests in `~/.loop/runs/*/*/manifest.json` as the source of truth for paired runs.
-- A loop run is active when its manifest state is `submitted`, `working`, `reviewing`, or `input-required` and either its `pid` is alive or its `tmuxSession` still exists.
-- Never kill or remove anything tied to an attached tmux session.
-- Never remove the current repo checkout or the worktree containing `pwd`.
-- Never delete a dirty worktree automatically. Report it and leave it alone unless the user explicitly asks to discard changes.
-- Avoid broad `pkill` patterns. Prefer per-PID `kill -TERM` after inspection.
-- Browser closure is destructive. Only do it when the user explicitly wants browser cleanup as part of the VM reset.
+- Always inspect the dry run before using `--apply`.
+- Treat loop manifests in `~/.loop/runs` as the source of truth for paired runs.
+- Keep any run whose manifest state is `submitted`, `working`, `reviewing`, or `input-required` and whose `pid` or `tmuxSession` is still live.
+- Never mass-kill `claude`, `codex`, or `node`. Kill only per PID after the script proves the process belongs to stale loop state.
+- Never remove the main worktree, the worktree containing the current `pwd`, or a dirty worktree.
+- The script does not auto-force worktree removal. If a plain `git worktree remove` fails, it reports the failure and leaves escalation to a manual follow-up.
+- Treat any live tmux session as in use even if the manifest looks stale.
+- Browser cleanup is opt-in and macOS-only.
 
-## Workflow
+## What the Script Checks
 
-### 1. Snapshot loop state
+- repo identity via `git rev-parse --git-common-dir`, using the same repo id scheme as loop
+- run manifests under `~/.loop/runs`
+- tmux liveness with `tmux has-session -t <name>`
+- helper processes whose command line references a stale run dir
+- dev servers matching `next dev`, `next-server`, `storybook`, or `start-storybook`
+- worktrees from `git worktree list --porcelain`
 
-Collect the current state first.
+## Manual Fallback
+
+If the script cannot classify something safely, leave it alone and inspect it manually:
 
 ```bash
 tmux ls 2>/dev/null
 tmux list-panes -a -F '#{session_name} #{pane_dead} #{pane_current_command} #{pane_current_path}' 2>/dev/null
-find ~/.loop/runs -maxdepth 5 -name manifest.json 2>/dev/null
 git worktree list --porcelain
+lsof -nP -iTCP -sTCP:LISTEN | grep -E 'next|storybook|node'
+ps -axo pid=,tty=,command= | grep -E 'claude|codex|next dev|storybook'
 ```
 
-For loop manifests, inspect `cwd`, `pid`, `state`, `updatedAt`, and `tmuxSession`.
-Useful states from loop are:
+Useful loop states:
 
 - active: `submitted`, `working`, `reviewing`, `input-required`
 - inactive: `completed`, `failed`, `stopped`
 
 If a manifest claims to be active but both the `pid` and `tmuxSession` are gone, treat it as stale.
-If a manifest still looks active but `updatedAt` is very old, treat it as suspicious and report it before killing anything that still has a live PID.
-
-### 2. Classify Claude and Codex processes
-
-Prefer loop-aware checks before process-name matching.
-
-For each manifest candidate:
-
-1. Check whether the `pid` is still alive.
-2. Check whether the `tmuxSession` still exists with `tmux has-session -t <name>`.
-3. If both are gone, the run is stale.
-
-For non-loop Claude or Codex processes, only kill them if you can prove they are orphaned or tied to stale loop state.
-Inspect first:
-
-```bash
-pgrep -af '(^|/)(claude|codex)( |$)'
-ps -o pid=,ppid=,etime=,tty=,command= -p <pid>
-lsof -a -d cwd -p <pid>
-```
-
-Safer rule:
-
-- kill only when the process is detached from a live tmux session, not tied to an active manifest, and clearly belongs to stale local work
-- otherwise report it and leave it running
-
-When killing, use:
-
-```bash
-kill -TERM <pid>
-sleep 2
-kill -0 <pid> 2>/dev/null && kill -KILL <pid>
-```
-
-### 3. Clean inactive Next.js and Storybook servers
-
-Only target dev servers that are not part of active work.
-Inspect listening processes and map them back to a cwd before killing them.
-
-```bash
-lsof -nP -iTCP -sTCP:LISTEN | grep -E 'node|next|storybook'
-pgrep -af 'next dev|next-server|storybook|start-storybook'
-lsof -a -d cwd -p <pid>
-tmux list-panes -a -F '#{session_name} #{pane_dead} #{pane_current_command} #{pane_current_path}' 2>/dev/null
-```
-
-Good cleanup candidates:
-
-- server process cwd belongs to a loop worktree whose tmux session is gone
-- server process cwd is not open in any live tmux pane
-- server process cwd belongs to a repo/worktree with no active manifest
-- long-lived local dev server with no attached tmux and no recent interactive owner
-
-Do not kill a server just because its command contains `node`.
-
-### 4. Close browser windows only on explicit cleanup requests
-
-This is macOS-only and destructive. Skip it on non-macOS hosts or if the user did not ask for browser cleanup.
-
-Use AppleScript and report failures instead of retrying aggressively:
-
-```bash
-osascript -e 'tell application "System Events" to if exists process "Google Chrome" then tell application "Google Chrome" to close every window'
-osascript -e 'tell application "System Events" to if exists process "Safari" then tell application "Safari" to close every window'
-```
-
-If automation permissions block the command, report that and continue.
-
-### 5. Remove unused worktrees carefully
-
-Use `git worktree list --porcelain` to classify worktrees.
-
-Safe removals:
-
-- entries already marked `prunable`
-- missing loop-created worktrees after `git worktree prune`
-- clean loop-created worktrees whose matching run is stale, whose tmux session is gone, and whose path is not open in a live tmux pane
-
-Inspect before removing:
-
-```bash
-git worktree list --porcelain
-git -C <path> status --short
-tmux list-panes -a -F '#{session_name} #{pane_dead} #{pane_current_path}' 2>/dev/null
-```
-
-Rules:
-
-- never remove the main worktree
-- never remove the worktree that contains the current shell cwd
-- never remove a worktree referenced by an active manifest `cwd`
-- if the worktree is dirty, report it and skip it
-
-Cleanup commands:
-
-```bash
-git worktree prune
-git worktree remove <path>
-git worktree remove --force <path>
-```
-
-Use `--force` only after a plain `git worktree remove <path>` fails because the worktree is locked or still registered elsewhere. A dirty `git status --short` result still means `skip`, even if `--force` would succeed.
 
 ## Report
 
