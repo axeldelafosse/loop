@@ -289,6 +289,11 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     ["bun", "/repo/src/cli.ts"],
     storage.runDir
   );
+  const claudePrompt = tmuxInternals.buildPeerPrompt(
+    "Ship feature",
+    opts,
+    "claude"
+  );
   const claudeCommand = tmuxInternals.buildShellCommand([
     "env",
     ...env,
@@ -296,7 +301,8 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       "claude-session-1",
       "opus",
       claudeChannelServer,
-      false
+      false,
+      claudePrompt
     ),
   ]);
   const codexCommand = tmuxInternals.buildShellCommand([
@@ -373,9 +379,7 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildPeerPrompt("Ship feature", opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
   );
@@ -461,15 +465,37 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
 
   expect(delegated).toBe(true);
   expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=1"];
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName("1");
+  const claudePrompt = tmuxInternals.buildInteractivePeerPrompt(opts, "claude");
+  const claudeCommand = tmuxInternals.buildShellCommand([
+    "env",
+    ...env,
+    ...tmuxInternals.buildClaudeCommand(
+      "claude-session-1",
+      "opus",
+      claudeChannelServer,
+      false,
+      claudePrompt
+    ),
+  ]);
+  expect(calls[2]).toEqual([
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    "repo-loop-1",
+    "-c",
+    "/repo",
+    claudeCommand,
+  ]);
   const typedByPane = new Map<string, string[]>();
   for (const entry of typed) {
     const values = typedByPane.get(entry.pane) ?? [];
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildInteractivePeerPrompt(opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildInteractivePrimaryPrompt(opts)
   );
@@ -629,9 +655,7 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildPeerPrompt("Ship feature", opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
   );

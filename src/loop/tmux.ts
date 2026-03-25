@@ -824,7 +824,8 @@ const startPairedSession = async (
       claudeSessionId,
       resolveTmuxModel("claude", launch.opts),
       claudeChannelServer,
-      hadClaudeSession
+      hadClaudeSession,
+      hadClaudeSession ? undefined : claudePrompt
     ),
   ]);
   const codexCommand = buildShellCommand([
@@ -880,17 +881,11 @@ const startPairedSession = async (
   const primaryPrompt =
     launch.opts.agent === "claude" ? claudePrompt : codexPrompt;
 
-  if (!hadClaudeSession && peerPane.endsWith(":0.0")) {
-    await seedPanePrompt(peerPane, peerPrompt, deps);
-  }
   if (!hadCodexThread && peerPane.endsWith(":0.1")) {
     await submitCodexPrompt(session, peerPrompt, deps);
   }
   if (!(hadClaudeSession && hadCodexThread)) {
     await deps.sleep(REVIEWER_BOOT_DELAY_MS);
-  }
-  if (!hadClaudeSession && primaryPane.endsWith(":0.0")) {
-    await seedPanePrompt(primaryPane, primaryPrompt, deps);
   }
   if (!hadCodexThread && primaryPane.endsWith(":0.1")) {
     await submitCodexPrompt(session, primaryPrompt, deps);
