@@ -1,0 +1,7 @@
+interface:
+  display_name: "Clean VM"
+  short_description: "Clean stale loop runs, tabs, and worktrees"
+  default_prompt: "Use $clean-vm to dry-run cleanup for this loop VM, then apply it without touching active sessions."
+
+policy:
+  allow_implicit_invocation: false
