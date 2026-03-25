@@ -124,9 +124,13 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
-const pairedBridgeGuidance = (agent: Agent): string => {
+const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
+  const serverName = buildClaudeChannelServerName(runId);
+  const prefix = `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`;
+
   if (agent === "claude") {
     return [
+      prefix,
       'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
       'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
       'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
@@ -145,7 +149,6 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
 
   if (agent === opts.agent) {
     return [
-      "Workflow:",
       `You are the main worker. ${peer} reviews and helps on request.`,
       "Implement and verify first, then ask for review.",
       "Keep iterating until your own review and the peer review both pass.",
@@ -154,7 +157,6 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
   }
 
   return [
-    "Workflow:",
     `${primary} is the main worker. You are the reviewer/support agent.`,
     "Do not take over the task or create the PR yourself.",
     `When ${primary} asks, do a real review against the task, proof requirements, and repo state.`,
@@ -162,16 +164,20 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
   ].join("\n");
 };
 
-const buildPrimaryPrompt = (task: string, opts: Options): string => {
+const buildPrimaryPrompt = (
+  task: string,
+  opts: Options,
+  runId: string
+): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Agent-to-agent pair programming. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
     `Your peer is ${peer}. Do the initial pass yourself, then use "send_to_agent" when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
-  parts.push(pairedBridgeGuidance(opts.agent));
+  parts.push(pairedBridgeGuidance(opts.agent, runId));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
     `${peer} should send a short ready message. Wait briefly if it arrives, then inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
@@ -179,26 +185,34 @@ const buildPrimaryPrompt = (task: string, opts: Options): string => {
   return parts.join("\n\n");
 };
 
-const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
+const buildPeerPrompt = (
+  task: string,
+  opts: Options,
+  agent: Agent,
+  runId: string
+): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Agent-to-agent pair programming. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming: ${primary} is the primary agent for this run.`,
     `Task:\n${task.trim()}`,
     `You are ${capitalize(agent)}. Do not start implementing or verifying this task on your own.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent));
+  parts.push(pairedBridgeGuidance(agent, runId));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. Waiting for your request." After that, wait for ${primary} to send you a targeted request or review ask.`
+    `Wait for ${primary} to send you a targeted request or review ask.`
   );
   return parts.join("\n\n");
 };
 
-const buildInteractivePrimaryPrompt = (opts: Options): string => {
+const buildInteractivePrimaryPrompt = (
+  opts: Options,
+  runId: string
+): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Agent-to-agent pair programming. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
     `Your peer is ${peer}. Use "send_to_agent" for review or help once the human gives you a task.`,
   ];
@@ -206,40 +220,48 @@ const buildInteractivePrimaryPrompt = (opts: Options): string => {
   parts.push(
     `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Apply that once the human gives you a concrete task.`
   );
-  parts.push(pairedBridgeGuidance(opts.agent));
+  parts.push(pairedBridgeGuidance(opts.agent, runId));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `Wait for the first human task. Do not implement until one arrives. Once it does, coordinate directly with ${peer} and keep the paired review workflow intact.`
+    `Wait for the first human task. Do not implement until one arrives. Once it does, coordinate directly with ${peer} and keep the paired review workflow intact. Do not send a message to ${peer} until then.`
   );
   return parts.join("\n\n");
 };
 
-const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
+const buildInteractivePeerPrompt = (
+  opts: Options,
+  agent: Agent,
+  runId: string
+): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Agent-to-agent pair programming. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming: ${primary} is the primary agent for this run.`,
     "No task has been assigned yet.",
     `You are ${capitalize(agent)}. Stay idle until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent));
+  parts.push(pairedBridgeGuidance(agent, runId));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. Waiting for your request." After that, wait for ${primary} to provide a concrete task or review request. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
+    `Wait for ${primary} to provide a concrete task or review request. Do not send a message to ${primary} yet. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
   );
   return parts.join("\n\n");
 };
 
-const buildLaunchPrompt = (launch: PairedTmuxLaunch, agent: Agent): string => {
+const buildLaunchPrompt = (
+  launch: PairedTmuxLaunch,
+  agent: Agent,
+  runId: string
+): string => {
   const task = launch.task?.trim();
   if (!task) {
     return launch.opts.agent === agent
-      ? buildInteractivePrimaryPrompt(launch.opts)
-      : buildInteractivePeerPrompt(launch.opts, agent);
+      ? buildInteractivePrimaryPrompt(launch.opts, runId)
+      : buildInteractivePeerPrompt(launch.opts, agent, runId);
   }
   return launch.opts.agent === agent
-    ? buildPrimaryPrompt(task, launch.opts)
-    : buildPeerPrompt(task, launch.opts, agent);
+    ? buildPrimaryPrompt(task, launch.opts, runId)
+    : buildPeerPrompt(task, launch.opts, agent, runId);
 };
 
 const resolveTmuxModel = (agent: Agent, opts: Options): string => {
@@ -815,8 +837,8 @@ const startPairedSession = async (
   const claudeChannelServer = buildClaudeChannelServerName(storage.runId);
   registerClaudeChannelServer(deps, claudeChannelServer, storage.runDir);
   const env = [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${storage.runId}`];
-  const claudePrompt = buildLaunchPrompt(launch, "claude");
-  const codexPrompt = buildLaunchPrompt(launch, "codex");
+  const claudePrompt = buildLaunchPrompt(launch, "claude", storage.runId);
+  const codexPrompt = buildLaunchPrompt(launch, "codex", storage.runId);
   const claudeCommand = buildShellCommand([
     "env",
     ...env,
