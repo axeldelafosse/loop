@@ -19,6 +19,7 @@ python3 .agents/skills/clean-vm/scripts/clean_vm.py
 2. Review the report. The script only targets:
 
 - loop manifests under `~/.loop/runs/<repoId>`
+- direct `loop __bridge-mcp <runDir> <claude|codex>` processes for stale runs
 - loop helper processes tied to stale run dirs
 - Next.js and Storybook servers running inside stale loop worktrees
 - loop-created worktrees from `git worktree list --porcelain`
@@ -52,6 +53,7 @@ python3 .agents/skills/clean-vm/scripts/clean_vm.py --apply --browsers
 - run manifests under `~/.loop/runs`
 - tmux liveness with exact session targets like `tmux has-session -t =<name>` plus a live-pane check from `tmux list-panes`
 - helper processes whose command line references a stale run dir
+- direct loop bridge MCP server processes whose run dir is stale or orphaned
 - dev servers matching `next dev`, `next-server`, `storybook`, or `start-storybook`
 - worktrees from `git worktree list --porcelain`
 

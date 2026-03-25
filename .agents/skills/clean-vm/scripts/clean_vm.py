@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from typing import Optional
 
 ACTIVE_STATES = {"submitted", "working", "reviewing", "input-required"}
 AGENT_RE = re.compile(r"(^|/)(claude|codex)(\s|$)")
+BRIDGE_SUBCOMMAND = "__bridge-mcp"
 LOOP_HELPER_MARKERS = ("__bridge-mcp", "__codex-tmux-proxy")
 SAFE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 SERVER_RE = re.compile(r"next dev|next-server|storybook|start-storybook")
@@ -36,6 +38,7 @@ class RepoContext:
 @dataclass
 class ProcessInfo:
     pid: int
+    ppid: int
     tty: str
     command: str
 
@@ -61,6 +64,13 @@ class WorktreeInfo:
     path: Path
     prunable: bool
     run_id: Optional[str]
+
+
+@dataclass
+class BridgeProcess:
+    pid: int
+    run_dir: Path
+    source: str
 
 
 def run_command(
@@ -218,13 +228,24 @@ def process_cwd(pid: int) -> Optional[Path]:
 
 
 def process_list() -> list[ProcessInfo]:
-    result = run_command(["ps", "-axo", "pid=,tty=,command="])
+    result = run_command(["ps", "-axo", "pid=,ppid=,tty=,command="])
     items: list[ProcessInfo] = []
     for line in result.stdout.splitlines():
-        parts = line.strip().split(None, 2)
-        if len(parts) != 3 or not parts[0].isdigit():
+        parts = line.strip().split(None, 3)
+        if (
+            len(parts) != 4
+            or not parts[0].isdigit()
+            or not parts[1].isdigit()
+        ):
             continue
-        items.append(ProcessInfo(pid=int(parts[0]), tty=parts[1], command=parts[2]))
+        items.append(
+            ProcessInfo(
+                pid=int(parts[0]),
+                ppid=int(parts[1]),
+                tty=parts[2],
+                command=parts[3],
+            )
+        )
     return items
 
 
@@ -241,6 +262,27 @@ def live_tmux_paths() -> list[Path]:
             continue
         paths.append(Path(parts[1]).resolve())
     return paths
+
+
+def parse_bridge_process(process: ProcessInfo) -> Optional[BridgeProcess]:
+    try:
+        tokens = shlex.split(process.command)
+    except ValueError:
+        return None
+    try:
+        index = tokens.index(BRIDGE_SUBCOMMAND)
+    except ValueError:
+        return None
+    if index + 2 >= len(tokens):
+        return None
+    source = tokens[index + 2]
+    if source not in {"claude", "codex"}:
+        return None
+    return BridgeProcess(
+        pid=process.pid,
+        run_dir=Path(tokens[index + 1]).resolve(),
+        source=source,
+    )
 
 
 def load_runs(context: RepoContext) -> tuple[list[RunInfo], list[str]]:
@@ -387,6 +429,41 @@ def classify_run_processes(
                 continue
             kill[process.pid] = f"helper for stale run {run.run_id}"
     return sorted(kill.items()), notes
+
+
+def classify_bridge_processes(
+    runs: list[RunInfo], protected: set[int], processes: list[ProcessInfo]
+) -> tuple[list[tuple[int, str]], list[str]]:
+    kill: list[tuple[int, str]] = []
+    notes: list[str] = []
+    runs_by_dir = {run.run_dir.resolve(): run for run in runs}
+    for process in processes:
+        if process.pid in protected:
+            continue
+        bridge = parse_bridge_process(process)
+        if bridge is None:
+            continue
+        run = runs_by_dir.get(bridge.run_dir)
+        if run is None:
+            notes.append(
+                f"left bridge server {bridge.pid} alone because run dir is unknown"
+            )
+            continue
+        parent_alive = bridge.pid != process.ppid and pid_exists(process.ppid)
+        if run.active and parent_alive:
+            continue
+        detail = (
+            f"stale run {run.run_id}"
+            if not run.active
+            else f"orphaned parent for active run {run.run_id}"
+        )
+        kill.append(
+            (
+                bridge.pid,
+                f"unused loop-bridge server for {detail} ({bridge.source})",
+            )
+        )
+    return kill, notes
 
 
 def classify_agent_processes(
@@ -543,13 +620,20 @@ def main() -> int:
     run_kills, run_notes = classify_run_processes(
         runs, protected, processes, tmux_paths
     )
+    bridge_kills, bridge_notes = classify_bridge_processes(
+        runs, protected, processes
+    )
     agent_notes = classify_agent_processes(runs, protected, processes)
     server_kills, server_notes = classify_servers(
         removable_worktrees, runs, protected, processes, tmux_paths
     )
 
+    kill_candidates: dict[int, str] = {}
+    for pid, reason in [*run_kills, *bridge_kills, *server_kills]:
+        kill_candidates.setdefault(pid, reason)
+
     process_actions: list[str] = []
-    for pid, reason in [*run_kills, *server_kills]:
+    for pid, reason in sorted(kill_candidates.items()):
         process_actions.append(f"{terminate_pid(pid, args.apply)} pid {pid}: {reason}")
 
     worktree_actions: list[str] = []
@@ -567,7 +651,7 @@ def main() -> int:
     print(f"repo: {context.repo_root}")
     print(f"repo id: {context.repo_id}")
     print_section("runs", warnings + run_notes)
-    print_section("processes", process_actions + agent_notes)
+    print_section("processes", process_actions + bridge_notes + agent_notes)
     print_section("servers", server_notes)
     print_section("worktrees", worktree_actions + worktree_notes)
     print_section("browsers", browser_actions)
