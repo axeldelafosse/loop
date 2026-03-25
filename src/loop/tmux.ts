@@ -127,18 +127,18 @@ const pairedBridgeGuidance = (agent: Agent): string => {
     return [
       "Paired mode:",
       "You are in a persistent Claude/Codex pair.",
-      'When Codex sends you an inbound channel message, reply to Codex with the MCP tool "reply" and reuse the same chat_id.',
-      'Use "send_to_agent" only when you need to start a new proactive message to Codex.',
-      "Do not ask the human to relay messages between agents. Do not answer the human when Codex is waiting for the response.",
-      'Use "bridge_status" only for diagnostics if direct delivery seems stuck. Use "receive_messages" only as a manual fallback.',
+      'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
+      'Use "send_to_agent" only for new proactive messages to Codex.',
+      "Do not route messages through the human or answer the human while Codex is waiting on you.",
+      'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
     ].join("\n");
   }
 
   return [
     "Paired mode:",
-    'You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want Claude to act, review, or answer.',
-    "Do not ask the human to relay messages between agents. Normal paired messages should arrive directly.",
-    'Use "bridge_status" only for diagnostics if direct delivery seems stuck. Use "receive_messages" only as a manual fallback.',
+    'You are in a persistent Claude/Codex pair. Use "send_to_agent" when you want Claude to act, review, or answer.',
+    "Do not route messages through the human.",
+    'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
   ].join("\n");
 };
 
@@ -149,12 +149,10 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
   if (agent === opts.agent) {
     return [
       "Workflow:",
-      `You are the main worker. ${peer} is the peer reviewer/support agent.`,
-      "Do the implementation and verification work yourself first.",
-      `After your initial pass, ask ${peer} for review with "send_to_agent". Also do your own final review before closing out.`,
-      "If either your own review or the peer review finds an issue, keep working and repeat the review cycle until both reviews pass.",
-      "Do not stop after a single passing review.",
-      "Once both reviews pass, do the PR step yourself: create a draft PR for the current branch, or if a PR already exists, send a follow-up commit to it.",
+      `You are the main worker. ${peer} reviews and helps on request.`,
+      "Implement and verify first, then ask for review.",
+      "Keep iterating until your own review and the peer review both pass.",
+      "After both pass, handle the PR yourself: create a draft PR or send a follow-up commit to the existing PR.",
     ].join("\n");
   }
 
@@ -162,9 +160,8 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
     "Workflow:",
     `${primary} is the main worker. You are the reviewer/support agent.`,
     "Do not take over the task or create the PR yourself.",
-    `When ${primary} asks for review, do a real review against the task, proof requirements, and current repo state.`,
-    "If you find an issue, send clear actionable feedback back to the main worker.",
-    "If the work looks good, send an explicit approval so the main worker can count your review as passed.",
+    `When ${primary} asks, do a real review against the task, proof requirements, and repo state.`,
+    "Send either clear actionable feedback or an explicit approval.",
   ].join("\n");
 };
 
@@ -180,7 +177,7 @@ const buildPrimaryPrompt = (task: string, opts: Options): string => {
   parts.push(pairedBridgeGuidance(opts.agent));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `${peer} has already been prompted as the reviewer/support agent and should send you a short ready message. Wait briefly for that ready signal if it arrives quickly, then review the repo and begin the task. Ask ${peer} for review once you have concrete work or a specific question.`
+    `${peer} should send a short ready message. Wait briefly if it arrives, then inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
   );
   return parts.join("\n\n");
 };
@@ -196,7 +193,7 @@ const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
   parts.push(pairedBridgeGuidance(agent));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. I have the task context and I am waiting for your request." After that, wait for ${primary} to send you a targeted request or review ask.`
+    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. Waiting for your request." After that, wait for ${primary} to send you a targeted request or review ask.`
   );
   return parts.join("\n\n");
 };
@@ -206,7 +203,7 @@ const buildInteractivePrimaryPrompt = (opts: Options): string => {
   const parts = [
     `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" when you want ${peer} to review work, answer questions, or help once the human gives you a task.`,
+    `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(
@@ -215,7 +212,7 @@ const buildInteractivePrimaryPrompt = (opts: Options): string => {
   parts.push(pairedBridgeGuidance(opts.agent));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `Wait for the human to provide the first task. Do not start implementing anything until a task arrives. Once you have a concrete task, coordinate directly with ${peer} and keep the paired review workflow intact.`
+    `Wait for the first human task. Do not implement until one arrives. Once it does, coordinate directly with ${peer} and keep the paired review workflow intact.`
   );
   return parts.join("\n\n");
 };
@@ -225,13 +222,13 @@ const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
   const parts = [
     `Paired tmux mode. ${primary} is the primary agent for this run.`,
     "No task has been assigned yet.",
-    `You are ${capitalize(agent)}. Your reviewer/support role is active, but do not start implementing or verifying anything until ${primary} sends a specific request or the human clearly assigns you separate work.`,
+    `You are ${capitalize(agent)}. Stay idle until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(pairedBridgeGuidance(agent));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. I am waiting for your request." After that, wait for ${primary} to provide a concrete task or review request. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
+    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. Waiting for your request." After that, wait for ${primary} to provide a concrete task or review request. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
   );
   return parts.join("\n\n");
 };

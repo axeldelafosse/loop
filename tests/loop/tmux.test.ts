@@ -513,18 +513,18 @@ test("tmux prompts keep the paired review workflow explicit", () => {
 
   expect(primaryPrompt).toContain("You are the main worker.");
   expect(primaryPrompt).toContain(
-    "If either your own review or the peer review finds an issue"
+    "your own review and the peer review both pass"
   );
-  expect(primaryPrompt).toContain("create a draft PR");
-  expect(primaryPrompt).toContain("ready signal");
+  expect(primaryPrompt).toContain(
+    "create a draft PR or send a follow-up commit to the existing PR"
+  );
+  expect(primaryPrompt).toContain("Wait briefly if it arrives");
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
   expect(peerPrompt).toContain("Reviewer ready.");
   expect(peerPrompt).toContain('"reply"');
-  expect(peerPrompt).toContain(
-    "Do not answer the human when Codex is waiting for the response."
-  );
+  expect(peerPrompt).toContain("Do not route messages through the human");
 });
 
 test("interactive tmux prompts tell both agents to wait for the human", () => {
@@ -533,17 +533,13 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(opts, "claude");
 
   expect(primaryPrompt).toContain("No task has been assigned yet.");
-  expect(primaryPrompt).toContain(
-    "Wait for the human to provide the first task"
-  );
+  expect(primaryPrompt).toContain("Wait for the first human task");
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
   expect(peerPrompt).toContain("Reviewer ready. No task yet.");
   expect(peerPrompt).toContain("human clearly assigns you separate work");
   expect(peerPrompt).toContain('"reply"');
-  expect(peerPrompt).toContain(
-    "Do not answer the human when Codex is waiting for the response."
-  );
+  expect(peerPrompt).toContain("Do not route messages through the human");
   expect(peerPrompt).toContain(
     "If you are answering Codex, use the bridge tools instead of a human-facing reply."
   );
