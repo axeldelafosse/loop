@@ -1923,6 +1923,41 @@ test("tmux internals build shell command with escaping", () => {
   );
 });
 
+test("tmux internals unref detached helper processes", () => {
+  const calls: Array<{ argv: string[]; options: Record<string, unknown> }> = [];
+  let unrefCount = 0;
+
+  tmuxInternals.spawnDetachedProcess(
+    ["loop", "__codex-tmux-proxy"],
+    { HOME: "/tmp/home" },
+    (argv, options) => {
+      calls.push({
+        argv: argv.map((value) => String(value)),
+        options: options as Record<string, unknown>,
+      });
+      return {
+        unref: () => {
+          unrefCount += 1;
+        },
+      } as ReturnType<typeof import("bun").spawn>;
+    }
+  );
+
+  expect(calls).toEqual([
+    {
+      argv: ["loop", "__codex-tmux-proxy"],
+      options: {
+        detached: process.platform !== "win32",
+        env: { HOME: "/tmp/home" },
+        stderr: "ignore",
+        stdin: "ignore",
+        stdout: "ignore",
+      },
+    },
+  ]);
+  expect(unrefCount).toBe(1);
+});
+
 test("tmux internals launch Claude in bypass mode", () => {
   expect(
     tmuxInternals.buildClaudeCommand(

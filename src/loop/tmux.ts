@@ -113,6 +113,21 @@ const quoteShellArg = (value: string): string =>
 const buildShellCommand = (argv: string[]): string =>
   argv.map(quoteShellArg).join(" ");
 
+const spawnDetachedProcess = (
+  argv: string[],
+  env: NodeJS.ProcessEnv,
+  spawnFn: typeof spawn = spawn
+): void => {
+  const child = spawnFn(argv, {
+    detached: DETACH_CHILD_PROCESS,
+    env,
+    stderr: "ignore",
+    stdin: "ignore",
+    stdout: "ignore",
+  });
+  child.unref?.();
+};
+
 const stripTmuxFlag = (argv: string[]): string[] =>
   argv.filter((arg) => arg !== TMUX_FLAG);
 
@@ -1068,7 +1083,7 @@ const defaultDeps = (): TmuxDeps => ({
     threadId: string
   ) => {
     const port = await findCodexTmuxProxyPort();
-    spawn(
+    spawnDetachedProcess(
       [
         ...buildLaunchArgv(),
         CODEX_TMUX_PROXY_SUBCOMMAND,
@@ -1077,13 +1092,7 @@ const defaultDeps = (): TmuxDeps => ({
         threadId,
         String(port),
       ],
-      {
-        detached: DETACH_CHILD_PROCESS,
-        env: process.env,
-        stderr: "ignore",
-        stdin: "ignore",
-        stdout: "ignore",
-      }
+      process.env
     );
     return waitForCodexTmuxProxy(port);
   },
@@ -1201,6 +1210,7 @@ export const tmuxInternals = {
   buildPrimaryPrompt,
   buildRunName,
   buildShellCommand,
+  spawnDetachedProcess,
   isSessionConflict,
   quoteShellArg,
   sanitizeBase,
