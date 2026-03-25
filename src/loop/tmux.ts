@@ -609,8 +609,8 @@ const buildSessionCommand = (
 
 const tmuxStartupMessage = (paired: boolean): string =>
   paired
-    ? "[loop] starting paired tmux workspace. This can take a few seconds..."
-    : "[loop] starting tmux session. This can take a few seconds...";
+    ? "[loop] starting paired tmux workspace..."
+    : "[loop] starting tmux session...";
 
 const updatePairedManifest = (
   deps: TmuxDeps,
