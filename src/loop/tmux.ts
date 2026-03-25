@@ -36,6 +36,8 @@ const RUN_BASE_ENV = "LOOP_RUN_BASE";
 const RUN_ID_ENV = "LOOP_RUN_ID";
 const CLAUDE_TRUST_PROMPT = "Is this a project you created or one you trust?";
 const CLAUDE_BYPASS_PROMPT = "running in Bypass Permissions mode";
+const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
+const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
 const CLAUDE_CHANNEL_SCOPE = "local";
 const CLAUDE_PROMPT_INITIAL_POLLS = 8;
 const CLAUDE_PROMPT_POLL_DELAY_MS = 250;
@@ -125,8 +127,6 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
 const pairedBridgeGuidance = (agent: Agent): string => {
   if (agent === "claude") {
     return [
-      "Agent-to-agent pair programming:",
-      "You are in a persistent Claude/Codex pair.",
       'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
       'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
       'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
@@ -134,8 +134,7 @@ const pairedBridgeGuidance = (agent: Agent): string => {
   }
 
   return [
-    "Agent-to-agent pair programming:",
-    'You are in a persistent Claude/Codex pair. Message Claude with "send_to_agent", not a human-facing message.',
+    'Message Claude with "send_to_agent", not a human-facing message.',
     'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
   ].join("\n");
 };
@@ -680,12 +679,18 @@ const runTmuxCommand = (
   throw new Error(`${message}${suffix}`);
 };
 
-const detectClaudePrompt = (text: string): "bypass" | "trust" | undefined => {
-  if (text.includes(CLAUDE_TRUST_PROMPT)) {
-    return "trust";
-  }
+const detectClaudePrompt = (text: string): "bypass" | "confirm" | undefined => {
   if (text.includes(CLAUDE_BYPASS_PROMPT)) {
     return "bypass";
+  }
+  if (text.includes(CLAUDE_TRUST_PROMPT)) {
+    return "confirm";
+  }
+  if (
+    text.includes(CLAUDE_DEV_CHANNELS_PROMPT) &&
+    text.includes(CLAUDE_DEV_CHANNELS_CONFIRM)
+  ) {
+    return "confirm";
   }
   return undefined;
 };
@@ -706,7 +711,7 @@ const unblockClaudePane = async (
     attempt += 1
   ) {
     const prompt = detectClaudePrompt(deps.capturePane(pane));
-    if (prompt === "trust") {
+    if (prompt === "confirm") {
       deps.sendKeys(pane, ["Enter"]);
       handledPrompt = true;
       quietPolls = 0;

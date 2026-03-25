@@ -563,6 +563,15 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
   const typed: Array<{ pane: string; text: string }> = [];
   let sessionStarted = false;
   let pollCount = 0;
+  const devChannelsPrompt = [
+    "WARNING: Loading development channels",
+    "",
+    "--dangerously-load-development-channels is for local channel development only.",
+    "",
+    "1. I am using this for local development",
+  ].join("\n");
+  const bypassPrompt =
+    "WARNING: Claude Code running in Bypass Permissions mode";
   const opts = makePairedOptions();
   const manifest = createRunManifest({
     cwd: "/repo",
@@ -587,10 +596,10 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
       capturePane: () => {
         pollCount += 1;
         if (pollCount === 1) {
-          return "Is this a project you created or one you trust?";
+          return devChannelsPrompt;
         }
         if (pollCount === 2) {
-          return "WARNING: Claude Code running in Bypass Permissions mode";
+          return `${devChannelsPrompt}\n\n${bypassPrompt}`;
         }
         return "";
       },
@@ -667,6 +676,82 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
     tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
   );
+});
+
+test("runInTmux still confirms Claude trust prompts in paired mode", async () => {
+  const keyCalls: Array<{ keys: string[]; pane: string }> = [];
+  let sessionStarted = false;
+  let pollCount = 0;
+  const manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => {
+        pollCount += 1;
+        if (pollCount === 1) {
+          return "Is this a project you created or one you trust?";
+        }
+        return "";
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (pane: string, keys: string[]) => {
+        keyCalls.push({ keys, pane });
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => update(manifest),
+    },
+    { opts: makePairedOptions(), task: "Ship feature" }
+  );
+
+  expect(keyCalls).toContainEqual({
+    keys: ["Enter"],
+    pane: "repo-loop-1:0.0",
+  });
 });
 
 test("runInTmux reopens paired tmux panes without replaying the task", async () => {
