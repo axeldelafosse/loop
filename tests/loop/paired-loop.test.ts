@@ -607,6 +607,10 @@ test("runPairedLoop delivers forwarded bridge messages to the target agent", asy
       "Message from Codex via the loop bridge:"
     );
     expect(calls[0]?.prompt).toContain("Please review the Codex output.");
+    expect(calls[0]?.prompt).toContain("Do not reply to the human.");
+    expect(calls[0]?.prompt).toContain(
+      'Reply to the other agent with "send_to_agent"'
+    );
 
     const events = bridgeInternals.readBridgeEvents(runDir);
     expect(events.some((event) => event.kind === "delivered")).toBe(true);
@@ -773,12 +777,16 @@ test("runPairedLoop delivers peer messages back to the primary agent", async () 
     expect(calls[1]?.prompt).toContain(
       "Please verify the implementation details."
     );
+    expect(calls[1]?.prompt).toContain("Do not reply to the human.");
     expect(calls[2]?.agent).toBe("claude");
     expect(calls[2]?.prompt).toContain(
       "Message from Codex via the loop bridge:"
     );
     expect(calls[2]?.prompt).toContain(
       "Found one change to make before landing this."
+    );
+    expect(calls[2]?.prompt).toContain(
+      'Reply to the other agent with "send_to_agent"'
     );
   });
 });

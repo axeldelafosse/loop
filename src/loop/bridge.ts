@@ -362,6 +362,7 @@ const claudeChannelInstructions = (): string =>
   [
     `Messages from the Codex agent arrive as <channel source="${BRIDGE_SERVER}" chat_id="..." user="${CLAUDE_CHANNEL_USER}" ...>.`,
     'When you are replying to an inbound channel message, use the "reply" tool and pass back the same chat_id.',
+    "Never answer the human when the inbound message came from Codex. Send the response back through the bridge tools instead.",
     'Use the "send_to_agent" tool for proactive messages to Codex that are not direct replies to a channel message.',
     'Use "bridge_status" only when direct delivery appears stuck.',
   ].join("\n");

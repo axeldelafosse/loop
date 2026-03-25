@@ -289,6 +289,12 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     ["bun", "/repo/src/cli.ts"],
     storage.runDir
   );
+  const claudePrompt = tmuxInternals.buildPeerPrompt(
+    "Ship feature",
+    opts,
+    "claude",
+    "1"
+  );
   const claudeCommand = tmuxInternals.buildShellCommand([
     "env",
     ...env,
@@ -296,7 +302,8 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       "claude-session-1",
       "opus",
       claudeChannelServer,
-      false
+      false,
+      claudePrompt
     ),
   ]);
   const codexCommand = tmuxInternals.buildShellCommand([
@@ -373,11 +380,9 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildPeerPrompt("Ship feature", opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
-    tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
+    tmuxInternals.buildPrimaryPrompt("Ship feature", opts, "1")
   );
   expect(logs[0]).toBe(
     "[loop] starting paired tmux workspace. This can take a few seconds..."
@@ -461,55 +466,113 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
 
   expect(delegated).toBe(true);
   expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=1"];
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName("1");
+  const claudePrompt = tmuxInternals.buildInteractivePeerPrompt(
+    opts,
+    "claude",
+    "1"
+  );
+  const claudeCommand = tmuxInternals.buildShellCommand([
+    "env",
+    ...env,
+    ...tmuxInternals.buildClaudeCommand(
+      "claude-session-1",
+      "opus",
+      claudeChannelServer,
+      false,
+      claudePrompt
+    ),
+  ]);
+  expect(calls[2]).toEqual([
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    "repo-loop-1",
+    "-c",
+    "/repo",
+    claudeCommand,
+  ]);
   const typedByPane = new Map<string, string[]>();
   for (const entry of typed) {
     const values = typedByPane.get(entry.pane) ?? [];
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildInteractivePeerPrompt(opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
-    tmuxInternals.buildInteractivePrimaryPrompt(opts)
+    tmuxInternals.buildInteractivePrimaryPrompt(opts, "1")
   );
   expect(manifest.tmuxSession).toBe("repo-loop-1");
 });
 
 test("tmux prompts keep the paired review workflow explicit", () => {
   const opts = makePairedOptions();
-  const primaryPrompt = tmuxInternals.buildPrimaryPrompt("Ship feature", opts);
+  const primaryPrompt = tmuxInternals.buildPrimaryPrompt(
+    "Ship feature",
+    opts,
+    "1"
+  );
   const peerPrompt = tmuxInternals.buildPeerPrompt(
     "Ship feature",
     opts,
-    "claude"
+    "claude",
+    "1"
   );
 
+  expect(primaryPrompt).toContain("Agent-to-agent pair programming");
   expect(primaryPrompt).toContain("You are the main worker.");
   expect(primaryPrompt).toContain(
-    "If either your own review or the peer review finds an issue"
+    "your own review and the peer review both pass"
   );
-  expect(primaryPrompt).toContain("create a draft PR");
-  expect(primaryPrompt).toContain("ready signal");
+  expect(primaryPrompt).toContain(
+    "create a draft PR or send a follow-up commit to the existing PR"
+  );
+  expect(primaryPrompt).toContain("Wait briefly if it arrives");
+  expect(primaryPrompt).toContain(
+    'Message Claude with "send_to_agent", not a human-facing message'
+  );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
-  expect(peerPrompt).toContain("Reviewer ready.");
+  expect(peerPrompt).toContain("Wait for Codex to send you a targeted request");
+  expect(peerPrompt).toContain('"reply"');
+  expect(peerPrompt).toContain(
+    'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
+  );
+  expect(primaryPrompt).not.toContain("mcp__loop-bridge-1__ prefix");
+  expect(peerPrompt).toContain("mcp__loop-bridge-1__ prefix");
 });
 
 test("interactive tmux prompts tell both agents to wait for the human", () => {
   const opts = makePairedOptions({ proof: "" });
-  const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(opts);
-  const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(opts, "claude");
+  const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(opts, "1");
+  const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(
+    opts,
+    "claude",
+    "1"
+  );
 
+  expect(primaryPrompt).toContain("Agent-to-agent pair programming");
   expect(primaryPrompt).toContain("No task has been assigned yet.");
+  expect(primaryPrompt).toContain("Wait for the first human task");
   expect(primaryPrompt).toContain(
-    "Wait for the human to provide the first task"
+    'Message Claude with "send_to_agent", not a human-facing message'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
-  expect(peerPrompt).toContain("Reviewer ready. No task yet.");
-  expect(peerPrompt).toContain("wait for the human");
+  expect(peerPrompt).toContain("Wait for Codex to provide a concrete task");
+  expect(peerPrompt).toContain("human clearly assigns you separate work");
+  expect(peerPrompt).toContain('"reply"');
+  expect(peerPrompt).toContain(
+    'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
+  );
+  expect(peerPrompt).toContain(
+    "If you are answering Codex, use the bridge tools instead of a human-facing reply."
+  );
+  expect(primaryPrompt).not.toContain("mcp__loop-bridge-1__ prefix");
+  expect(peerPrompt).toContain("mcp__loop-bridge-1__ prefix");
 });
 
 test("runInTmux auto-confirms Claude startup prompts in paired mode", async () => {
@@ -518,6 +581,15 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
   const typed: Array<{ pane: string; text: string }> = [];
   let sessionStarted = false;
   let pollCount = 0;
+  const devChannelsPrompt = [
+    "WARNING: Loading development channels",
+    "",
+    "--dangerously-load-development-channels is for local channel development only.",
+    "",
+    "1. I am using this for local development",
+  ].join("\n");
+  const bypassPrompt =
+    "WARNING: Claude Code running in Bypass Permissions mode";
   const opts = makePairedOptions();
   const manifest = createRunManifest({
     cwd: "/repo",
@@ -542,10 +614,10 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
       capturePane: () => {
         pollCount += 1;
         if (pollCount === 1) {
-          return "Is this a project you created or one you trust?";
+          return devChannelsPrompt;
         }
         if (pollCount === 2) {
-          return "WARNING: Claude Code running in Bypass Permissions mode";
+          return `${devChannelsPrompt}\n\n${bypassPrompt}`;
         }
         return "";
       },
@@ -618,12 +690,86 @@ test("runInTmux auto-confirms Claude startup prompts in paired mode", async () =
     values.push(entry.text);
     typedByPane.set(entry.pane, values);
   }
-  expect(typedByPane.get("repo-loop-1:0.0")?.join("\n")).toBe(
-    tmuxInternals.buildPeerPrompt("Ship feature", opts, "claude")
-  );
+  expect(typedByPane.get("repo-loop-1:0.0")).toBeUndefined();
   expect(typedByPane.get("repo-loop-1:0.1")?.join("\n")).toBe(
-    tmuxInternals.buildPrimaryPrompt("Ship feature", opts)
+    tmuxInternals.buildPrimaryPrompt("Ship feature", opts, "1")
   );
+});
+
+test("runInTmux still confirms Claude trust prompts in paired mode", async () => {
+  const keyCalls: Array<{ keys: string[]; pane: string }> = [];
+  let sessionStarted = false;
+  let pollCount = 0;
+  const manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => {
+        pollCount += 1;
+        if (pollCount === 1) {
+          return "Is this a project you created or one you trust?";
+        }
+        return "";
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (pane: string, keys: string[]) => {
+        keyCalls.push({ keys, pane });
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => update(manifest),
+    },
+    { opts: makePairedOptions(), task: "Ship feature" }
+  );
+
+  expect(keyCalls).toContainEqual({
+    keys: ["Enter"],
+    pane: "repo-loop-1:0.0",
+  });
 });
 
 test("runInTmux reopens paired tmux panes without replaying the task", async () => {

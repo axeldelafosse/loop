@@ -36,6 +36,8 @@ const RUN_BASE_ENV = "LOOP_RUN_BASE";
 const RUN_ID_ENV = "LOOP_RUN_ID";
 const CLAUDE_TRUST_PROMPT = "Is this a project you created or one you trust?";
 const CLAUDE_BYPASS_PROMPT = "running in Bypass Permissions mode";
+const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
+const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
 const CLAUDE_CHANNEL_SCOPE = "local";
 const CLAUDE_PROMPT_INITIAL_POLLS = 8;
 const CLAUDE_PROMPT_POLL_DELAY_MS = 250;
@@ -122,13 +124,21 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
-const pairedBridgeGuidance = (agent: Agent): string => {
-  const peer = agent === "claude" ? "Codex" : "Claude";
+const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
+  const serverName = buildClaudeChannelServerName(runId);
+
+  if (agent === "claude") {
+    return [
+      `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
+      'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
+      'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.',
+      'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
+    ].join("\n");
+  }
+
   return [
-    "Paired mode:",
-    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want ${peer} to act, review, or answer.`,
-    "Do not ask the human to relay messages between agents. Normal paired messages should arrive directly.",
-    'Use "bridge_status" only for diagnostics if direct delivery seems stuck. Use "receive_messages" only as a manual fallback.',
+    'Message Claude with "send_to_agent", not a human-facing message.',
+    'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
   ].join("\n");
 };
 
@@ -138,104 +148,119 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
 
   if (agent === opts.agent) {
     return [
-      "Workflow:",
-      `You are the main worker. ${peer} is the peer reviewer/support agent.`,
-      "Do the implementation and verification work yourself first.",
-      `After your initial pass, ask ${peer} for review with "send_to_agent". Also do your own final review before closing out.`,
-      "If either your own review or the peer review finds an issue, keep working and repeat the review cycle until both reviews pass.",
-      "Do not stop after a single passing review.",
-      "Once both reviews pass, do the PR step yourself: create a draft PR for the current branch, or if a PR already exists, send a follow-up commit to it.",
+      `You are the main worker. ${peer} reviews and helps on request.`,
+      "Implement and verify first, then ask for review.",
+      "Keep iterating until your own review and the peer review both pass.",
+      "After both pass, handle the PR yourself: create a draft PR or send a follow-up commit to the existing PR.",
     ].join("\n");
   }
 
   return [
-    "Workflow:",
     `${primary} is the main worker. You are the reviewer/support agent.`,
     "Do not take over the task or create the PR yourself.",
-    `When ${primary} asks for review, do a real review against the task, proof requirements, and current repo state.`,
-    "If you find an issue, send clear actionable feedback back to the main worker.",
-    "If the work looks good, send an explicit approval so the main worker can count your review as passed.",
+    `When ${primary} asks, do a real review against the task, proof requirements, and repo state.`,
+    "Send either clear actionable feedback or an explicit approval.",
   ].join("\n");
 };
 
-const buildPrimaryPrompt = (task: string, opts: Options): string => {
+const buildPrimaryPrompt = (
+  task: string,
+  opts: Options,
+  runId: string
+): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
     `Your peer is ${peer}. Do the initial pass yourself, then use "send_to_agent" when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
-  parts.push(pairedBridgeGuidance(opts.agent));
+  parts.push(pairedBridgeGuidance(opts.agent, runId));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `${peer} has already been prompted as the reviewer/support agent and should send you a short ready message. Wait briefly for that ready signal if it arrives quickly, then review the repo and begin the task. Ask ${peer} for review once you have concrete work or a specific question.`
+    `${peer} should send a short ready message. Wait briefly if it arrives, then inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
   );
   return parts.join("\n\n");
 };
 
-const buildPeerPrompt = (task: string, opts: Options, agent: Agent): string => {
+const buildPeerPrompt = (
+  task: string,
+  opts: Options,
+  agent: Agent,
+  runId: string
+): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Paired tmux mode. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming: ${primary} is the primary agent for this run.`,
     `Task:\n${task.trim()}`,
     `You are ${capitalize(agent)}. Do not start implementing or verifying this task on your own.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent));
+  parts.push(pairedBridgeGuidance(agent, runId));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. I have the task context and I am waiting for your request." After that, wait for ${primary} to send you a targeted request or review ask.`
+    `Wait for ${primary} to send you a targeted request or review ask.`
   );
   return parts.join("\n\n");
 };
 
-const buildInteractivePrimaryPrompt = (opts: Options): string => {
+const buildInteractivePrimaryPrompt = (
+  opts: Options,
+  runId: string
+): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
-    `Paired tmux mode. You are the primary ${capitalize(opts.agent)} agent for this run.`,
+    `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Stay in paired mode and use "send_to_agent" when you want ${peer} to review work, answer questions, or help once the human gives you a task.`,
+    `Your peer is ${peer}. Use "send_to_agent" for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(
     `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Apply that once the human gives you a concrete task.`
   );
-  parts.push(pairedBridgeGuidance(opts.agent));
+  parts.push(pairedBridgeGuidance(opts.agent, runId));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `Wait for the human to provide the first task. Do not start implementing anything until a task arrives. Once you have a concrete task, coordinate directly with ${peer} and keep the paired review workflow intact.`
+    `Wait for the first human task. Do not implement until one arrives. Once it does, coordinate directly with ${peer} and keep the paired review workflow intact. Do not send a message to ${peer} until then.`
   );
   return parts.join("\n\n");
 };
 
-const buildInteractivePeerPrompt = (opts: Options, agent: Agent): string => {
+const buildInteractivePeerPrompt = (
+  opts: Options,
+  agent: Agent,
+  runId: string
+): string => {
   const primary = capitalize(opts.agent);
   const parts = [
-    `Paired tmux mode. ${primary} is the primary agent for this run.`,
+    `Agent-to-agent pair programming: ${primary} is the primary agent for this run.`,
     "No task has been assigned yet.",
-    `You are ${capitalize(agent)}. Your reviewer/support role is active, but do not start implementing or verifying anything until ${primary} or the human gives you a specific request.`,
+    `You are ${capitalize(agent)}. Stay idle until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent));
+  parts.push(pairedBridgeGuidance(agent, runId));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
-    `Your first action is to use "send_to_agent" to tell ${primary}: "Reviewer ready. No task yet. I am waiting for your request." After that, wait for the human or ${primary} to provide a concrete task or review request.`
+    `Wait for ${primary} to provide a concrete task or review request. Do not send a message to ${primary} yet. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
   );
   return parts.join("\n\n");
 };
 
-const buildLaunchPrompt = (launch: PairedTmuxLaunch, agent: Agent): string => {
+const buildLaunchPrompt = (
+  launch: PairedTmuxLaunch,
+  agent: Agent,
+  runId: string
+): string => {
   const task = launch.task?.trim();
   if (!task) {
     return launch.opts.agent === agent
-      ? buildInteractivePrimaryPrompt(launch.opts)
-      : buildInteractivePeerPrompt(launch.opts, agent);
+      ? buildInteractivePrimaryPrompt(launch.opts, runId)
+      : buildInteractivePeerPrompt(launch.opts, agent, runId);
   }
   return launch.opts.agent === agent
-    ? buildPrimaryPrompt(task, launch.opts)
-    : buildPeerPrompt(task, launch.opts, agent);
+    ? buildPrimaryPrompt(task, launch.opts, runId)
+    : buildPeerPrompt(task, launch.opts, agent, runId);
 };
 
 const resolveTmuxModel = (agent: Agent, opts: Options): string => {
@@ -675,12 +700,18 @@ const runTmuxCommand = (
   throw new Error(`${message}${suffix}`);
 };
 
-const detectClaudePrompt = (text: string): "bypass" | "trust" | undefined => {
-  if (text.includes(CLAUDE_TRUST_PROMPT)) {
-    return "trust";
-  }
+const detectClaudePrompt = (text: string): "bypass" | "confirm" | undefined => {
   if (text.includes(CLAUDE_BYPASS_PROMPT)) {
     return "bypass";
+  }
+  if (text.includes(CLAUDE_TRUST_PROMPT)) {
+    return "confirm";
+  }
+  if (
+    text.includes(CLAUDE_DEV_CHANNELS_PROMPT) &&
+    text.includes(CLAUDE_DEV_CHANNELS_CONFIRM)
+  ) {
+    return "confirm";
   }
   return undefined;
 };
@@ -701,7 +732,7 @@ const unblockClaudePane = async (
     attempt += 1
   ) {
     const prompt = detectClaudePrompt(deps.capturePane(pane));
-    if (prompt === "trust") {
+    if (prompt === "confirm") {
       deps.sendKeys(pane, ["Enter"]);
       handledPrompt = true;
       quietPolls = 0;
@@ -805,8 +836,8 @@ const startPairedSession = async (
   const claudeChannelServer = buildClaudeChannelServerName(storage.runId);
   registerClaudeChannelServer(deps, claudeChannelServer, storage.runDir);
   const env = [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${storage.runId}`];
-  const claudePrompt = buildLaunchPrompt(launch, "claude");
-  const codexPrompt = buildLaunchPrompt(launch, "codex");
+  const claudePrompt = buildLaunchPrompt(launch, "claude", storage.runId);
+  const codexPrompt = buildLaunchPrompt(launch, "codex", storage.runId);
   const claudeCommand = buildShellCommand([
     "env",
     ...env,
@@ -814,7 +845,8 @@ const startPairedSession = async (
       claudeSessionId,
       resolveTmuxModel("claude", launch.opts),
       claudeChannelServer,
-      hadClaudeSession
+      hadClaudeSession,
+      hadClaudeSession ? undefined : claudePrompt
     ),
   ]);
   const codexCommand = buildShellCommand([
@@ -870,17 +902,11 @@ const startPairedSession = async (
   const primaryPrompt =
     launch.opts.agent === "claude" ? claudePrompt : codexPrompt;
 
-  if (!hadClaudeSession && peerPane.endsWith(":0.0")) {
-    await seedPanePrompt(peerPane, peerPrompt, deps);
-  }
   if (!hadCodexThread && peerPane.endsWith(":0.1")) {
     await submitCodexPrompt(session, peerPrompt, deps);
   }
   if (!(hadClaudeSession && hadCodexThread)) {
     await deps.sleep(REVIEWER_BOOT_DELAY_MS);
-  }
-  if (!hadClaudeSession && primaryPane.endsWith(":0.0")) {
-    await seedPanePrompt(primaryPane, primaryPrompt, deps);
   }
   if (!hadCodexThread && primaryPane.endsWith(":0.1")) {
     await submitCodexPrompt(session, primaryPrompt, deps);
