@@ -46,15 +46,10 @@ const CLAUDE_EXIT_OPTION = "No, exit";
 const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
 const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
 const CLAUDE_CHANNEL_SCOPE = "local";
-const CLAUDE_PROMPT_INITIAL_POLLS = 8;
+const CLAUDE_PROMPT_INITIAL_POLLS = 4;
 const CLAUDE_PROMPT_POLL_DELAY_MS = 250;
 const CLAUDE_PROMPT_SETTLE_POLLS = 2;
-const CODEX_READY_POLL_DELAY_MS = 250;
-const CODEX_READY_POLLS = 20;
-const CODEX_SEND_FOOTER = "Ctrl+J newline";
 const MCP_ALREADY_EXISTS_RE = /already exists/i;
-const PROMPT_DISPATCH_DELAY_MS = 500;
-const REVIEWER_BOOT_DELAY_MS = 1500;
 
 interface SpawnResult {
   exitCode: number;
@@ -614,8 +609,8 @@ const buildSessionCommand = (
 
 const tmuxStartupMessage = (paired: boolean): string =>
   paired
-    ? "[loop] starting paired tmux workspace. This can take a few seconds..."
-    : "[loop] starting tmux session. This can take a few seconds...";
+    ? "[loop] starting paired tmux workspace..."
+    : "[loop] starting tmux session...";
 
 const updatePairedManifest = (
   deps: TmuxDeps,
@@ -749,8 +744,6 @@ const detectClaudePrompt = (text: string): "bypass" | "confirm" | undefined => {
   return undefined;
 };
 
-const codexReady = (text: string): boolean => text.includes(CODEX_SEND_FOOTER);
-
 const unblockClaudePane = async (
   session: string,
   deps: TmuxDeps
@@ -790,49 +783,6 @@ const unblockClaudePane = async (
       return;
     }
     await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
-  }
-};
-
-const waitForCodexReady = async (
-  session: string,
-  deps: TmuxDeps
-): Promise<void> => {
-  const pane = `${session}:0.1`;
-  for (let attempt = 0; attempt < CODEX_READY_POLLS; attempt += 1) {
-    if (codexReady(deps.capturePane(pane))) {
-      return;
-    }
-    await deps.sleep(CODEX_READY_POLL_DELAY_MS);
-  }
-};
-
-const seedPanePrompt = async (
-  pane: string,
-  prompt: string,
-  deps: TmuxDeps
-): Promise<void> => {
-  const lines = prompt.split("\n");
-  for (let index = 0; index < lines.length; index += 1) {
-    deps.sendText(pane, lines[index] ?? "");
-    if (index < lines.length - 1) {
-      deps.sendKeys(pane, ["C-j"]);
-    }
-  }
-  await deps.sleep(100);
-  deps.sendKeys(pane, ["Enter"]);
-};
-
-const submitCodexPrompt = async (
-  session: string,
-  prompt: string,
-  deps: TmuxDeps
-): Promise<void> => {
-  const pane = `${session}:0.1`;
-  await waitForCodexReady(session, deps);
-  await seedPanePrompt(pane, prompt, deps);
-  await deps.sleep(CODEX_READY_POLL_DELAY_MS);
-  if (codexReady(deps.capturePane(pane))) {
-    deps.sendKeys(pane, ["Enter"]);
   }
 };
 
@@ -890,7 +840,8 @@ const startPairedSession = async (
     ...buildCodexCommand(
       codexProxyUrl,
       resolveTmuxModel("codex", launch.opts),
-      launch.opts.codexMcpConfigArgs ?? []
+      launch.opts.codexMcpConfigArgs ?? [],
+      hadCodexThread ? undefined : codexPrompt
     ),
   ]);
 
@@ -927,25 +878,8 @@ const startPairedSession = async (
     "even-horizontal",
   ]);
   await unblockClaudePane(session, deps);
-  await deps.sleep(PROMPT_DISPATCH_DELAY_MS);
-  const peerPane =
-    launch.opts.agent === "claude" ? `${session}:0.1` : `${session}:0.0`;
   const primaryPane =
     launch.opts.agent === "claude" ? `${session}:0.0` : `${session}:0.1`;
-  const peerPrompt =
-    launch.opts.agent === "claude" ? codexPrompt : claudePrompt;
-  const primaryPrompt =
-    launch.opts.agent === "claude" ? claudePrompt : codexPrompt;
-
-  if (!hadCodexThread && peerPane.endsWith(":0.1")) {
-    await submitCodexPrompt(session, peerPrompt, deps);
-  }
-  if (!(hadClaudeSession && hadCodexThread)) {
-    await deps.sleep(REVIEWER_BOOT_DELAY_MS);
-  }
-  if (!hadCodexThread && primaryPane.endsWith(":0.1")) {
-    await submitCodexPrompt(session, primaryPrompt, deps);
-  }
   deps.spawn(["tmux", "select-pane", "-t", primaryPane]);
   return session;
 };
