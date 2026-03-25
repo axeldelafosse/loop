@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "bun";
 import { injectCodexMessage } from "./codex-app-server";
 import { LOOP_VERSION } from "./constants";
+import { sanitizeBase } from "./git";
 import { buildLaunchArgv } from "./launch";
 import {
   appendRunTranscriptEntry,
@@ -17,6 +18,8 @@ import {
   isActiveRunState,
   parseRunLifecycleState,
   readRunManifest,
+  touchRunManifest,
+  updateRunManifest,
 } from "./run-state";
 import type { Agent } from "./types";
 
@@ -126,6 +129,8 @@ const eventSignature = (event: BridgeMessage): string =>
   bridgeSignature(event.source, event.target, event.message);
 
 const bridgePath = (runDir: string): string => join(runDir, BRIDGE_FILE);
+const manifestPath = (runDir: string): string => join(runDir, "manifest.json");
+const bridgeCommandDeps = { spawnSync };
 
 const ensureParentDir = (path: string): void => {
   mkdirSync(dirname(path), { recursive: true });
@@ -351,11 +356,63 @@ const injectCodexTmuxMessage = async (
 };
 
 const tmuxSessionExists = (session: string): boolean => {
-  const result = spawnSync(["tmux", "has-session", "-t", session], {
-    stderr: "ignore",
-    stdout: "ignore",
-  });
+  const result = bridgeCommandDeps.spawnSync(
+    ["tmux", "has-session", "-t", session],
+    {
+      stderr: "ignore",
+      stdout: "ignore",
+    }
+  );
   return result.exitCode === 0;
+};
+
+const claudeChannelServerName = (runId: string): string =>
+  `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
+
+const removeClaudeChannelServer = (runId: string): void => {
+  if (!runId) {
+    return;
+  }
+  try {
+    bridgeCommandDeps.spawnSync(
+      [
+        "claude",
+        "mcp",
+        "remove",
+        "--scope",
+        "local",
+        claudeChannelServerName(runId),
+      ],
+      {
+        stderr: "ignore",
+        stdout: "ignore",
+      }
+    );
+  } catch {
+    // Cleanup should not fail the bridge flow.
+  }
+};
+
+export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
+  let removedRunId = "";
+  const next = updateRunManifest(manifestPath(runDir), (manifest) => {
+    if (!manifest?.tmuxSession) {
+      return manifest;
+    }
+    removedRunId = manifest.runId;
+    return touchRunManifest(
+      {
+        ...manifest,
+        tmuxSession: undefined,
+      },
+      new Date().toISOString()
+    );
+  });
+  if (!(next && removedRunId)) {
+    return false;
+  }
+  removeClaudeChannelServer(removedRunId);
+  return true;
 };
 
 const claudeChannelInstructions = (): string =>
@@ -486,8 +543,11 @@ const deliverCodexBridgeMessage = async (
   const status = readBridgeStatus(runDir);
   // A stale tmux session entry should not block direct app-server delivery on a
   // later non-tmux resume.
-  if (status.tmuxSession && tmuxSessionExists(status.tmuxSession)) {
-    return false;
+  if (status.tmuxSession) {
+    if (tmuxSessionExists(status.tmuxSession)) {
+      return false;
+    }
+    clearStaleTmuxBridgeState(runDir);
   }
   if (!(status.codexRemoteUrl && status.codexThreadId)) {
     return false;
@@ -515,6 +575,10 @@ const deliverCodexBridgeMessage = async (
 const drainCodexTmuxMessages = async (runDir: string): Promise<boolean> => {
   const { tmuxSession } = readBridgeStatus(runDir);
   if (!tmuxSession) {
+    return false;
+  }
+  if (!tmuxSessionExists(tmuxSession)) {
+    clearStaleTmuxBridgeState(runDir);
     return false;
   }
   const message = readPendingBridgeMessages(runDir).find(
@@ -1027,7 +1091,11 @@ export const runBridgeWorker = async (runDir: string): Promise<void> => {
     if (!(state && isActiveRunState(state))) {
       return;
     }
-    if (!(status.tmuxSession && tmuxSessionExists(status.tmuxSession))) {
+    if (!status.tmuxSession) {
+      return;
+    }
+    if (!tmuxSessionExists(status.tmuxSession)) {
+      clearStaleTmuxBridgeState(runDir);
       return;
     }
     const delivered = await drainCodexTmuxMessages(runDir);
@@ -1081,6 +1149,9 @@ export const ensureClaudeBridgeConfig = (
 export const bridgeInternals = {
   appendBridgeEvent,
   bridgePath,
+  clearStaleTmuxBridgeState,
+  claudeChannelServerName,
+  commandDeps: bridgeCommandDeps,
   drainCodexTmuxMessages,
   deliverCodexBridgeMessage,
   readBridgeEvents,

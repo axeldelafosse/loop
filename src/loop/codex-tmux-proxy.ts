@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 import { serve, spawnSync } from "bun";
 import {
   type BridgeMessage,
+  clearStaleTmuxBridgeState,
   markBridgeMessage,
   readPendingBridgeMessages,
 } from "./bridge";
@@ -44,6 +45,8 @@ interface ProxyRoute {
   method?: string;
   threadId?: string;
 }
+
+type StopReason = "dead-tmux" | "inactive-run";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -421,30 +424,37 @@ class CodexTmuxProxy {
     }
   }
 
-  private shouldStop(): boolean {
+  private stopReason(): StopReason | undefined {
     const manifest = readRunManifest(join(this.runDir, "manifest.json"));
     if (!(manifest && isActiveRunState(manifest.state))) {
-      return true;
+      return "inactive-run";
     }
     const sessionAlive = manifest.tmuxSession
       ? isTmuxSessionAlive(manifest.tmuxSession)
       : false;
     if (sessionAlive) {
       this.sawTmuxSession = true;
+      return undefined;
     }
     return shouldStopForTmuxSession(
       sessionAlive,
       this.sawTmuxSession,
       this.startupDeadlineMs,
       Date.now()
-    );
+    )
+      ? "dead-tmux"
+      : undefined;
   }
 
   private drainBridgeMessages(): void {
     if (this.stopped) {
       return;
     }
-    if (this.shouldStop()) {
+    const stopReason = this.stopReason();
+    if (stopReason) {
+      if (stopReason === "dead-tmux") {
+        clearStaleTmuxBridgeState(this.runDir);
+      }
       this.stop();
       return;
     }
