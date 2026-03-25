@@ -44,9 +44,11 @@ const appServerUnexpectedExit: AppServerModule["CodexAppServerUnexpectedExitErro
   RunnerCodexUnexpectedExitError;
 
 const hasAppServerProcess: MockFn<() => boolean> = mock(() => false);
+const closeAppServer: MockFn<() => Promise<void>> = mock(async () => undefined);
 const interruptAppServer: MockFn<(signal: "SIGINT" | "SIGTERM") => void> = mock(
   () => undefined
 );
+const releaseAppServer: MockFn<() => void> = mock(() => undefined);
 const runCodexTurn: MockFn<
   (
     _prompt: string,
@@ -141,8 +143,10 @@ const installCodexServerMock = (): void => {
     CODEX_TRANSPORT_EXEC,
     CodexAppServerFallbackError: appServerFallback,
     CodexAppServerUnexpectedExitError: appServerUnexpectedExit,
+    closeAppServer,
     hasAppServerProcess,
     interruptAppServer,
+    releaseAppServer,
     runCodexTurn,
     runLegacyAgent,
     startAppServer,

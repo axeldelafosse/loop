@@ -12,8 +12,10 @@ import {
   CODEX_TRANSPORT_EXEC,
   CodexAppServerFallbackError,
   CodexAppServerUnexpectedExitError,
+  closeAppServer,
   hasAppServerProcess,
   interruptAppServer,
+  releaseAppServer,
   runCodexTurn,
   startAppServer,
   useAppServer,
@@ -603,4 +605,12 @@ export const startPersistentAgentSession = async (
     ...(sessionOptions.claudeLaunch ?? {}),
     persistent: true,
   });
+};
+
+export const releasePersistentCodexSession = (): void => {
+  releaseAppServer();
+};
+
+export const closePersistentCodexSession = async (): Promise<void> => {
+  await closeAppServer();
 };

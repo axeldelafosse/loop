@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readRunManifest } from "../../src/loop/run-state";
 
 const loadBridge = (
   overrides: {
@@ -461,7 +462,17 @@ test("bridge delivers Claude replies directly to Codex when app-server state is 
 
 test("bridge falls back to direct Codex delivery when the stored tmux session is stale", async () => {
   const injectCodexMessage = mock(async () => true);
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      return { exitCode: 1 };
+    }
+    if (args[0] === "claude" && args[1] === "mcp" && args[2] === "remove") {
+      return { exitCode: 0 };
+    }
+    return { exitCode: 0 };
+  });
   const bridge = await loadBridge({ injectCodexMessage });
+  bridge.bridgeInternals.commandDeps.spawnSync = spawnSync;
   const root = makeTempDir();
   const runDir = join(root, "run");
   mkdirSync(runDir, { recursive: true });
@@ -503,9 +514,154 @@ test("bridge falls back to direct Codex delivery when the stored tmux session is
     "codex-thread-1",
     "Please review the final state."
   );
+  expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
+    undefined
+  );
+  const removeCall = spawnSync.mock.calls.find(
+    (call) => call[0]?.[0] === "claude" && call[0]?.[2] === "remove"
+  );
+  expect(removeCall).toBeDefined();
+  expect(removeCall?.[0]).toEqual([
+    "claude",
+    "mcp",
+    "remove",
+    "--scope",
+    "local",
+    bridge.bridgeInternals.claudeChannelServerName("8"),
+  ]);
+  expect(removeCall?.[1]).toMatchObject({
+    stderr: "pipe",
+    stdout: "ignore",
+  });
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
 
   rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge stale tmux cleanup is a no-op when the manifest has no tmux session", async () => {
+  const spawnSync = mock(() => ({ exitCode: 0 }));
+  const bridge = await loadBridge();
+  bridge.bridgeInternals.commandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.bridgeInternals.clearStaleTmuxBridgeState(runDir)).toBe(false);
+  expect(spawnSync).not.toHaveBeenCalled();
+  expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
+    undefined
+  );
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge stale tmux cleanup logs non-zero Claude MCP remove exits", async () => {
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "claude" && args[1] === "mcp" && args[2] === "remove") {
+      return {
+        exitCode: 1,
+        stderr: Buffer.from("command failed", "utf8"),
+      };
+    }
+    return { exitCode: 0, stderr: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge();
+  bridge.bridgeInternals.commandDeps.spawnSync = spawnSync;
+  const errorSpy = mock(() => undefined);
+  const originalError = console.error;
+  console.error = errorSpy;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  try {
+    expect(bridge.bridgeInternals.clearStaleTmuxBridgeState(runDir)).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[loop] failed to remove Claude channel server "loop-bridge-8": command failed'
+    );
+    expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
+      undefined
+    );
+  } finally {
+    console.error = originalError;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bridge stale tmux cleanup logs thrown Claude MCP remove errors", async () => {
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "claude" && args[1] === "mcp" && args[2] === "remove") {
+      throw new Error("spawn failed");
+    }
+    return { exitCode: 0, stderr: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge();
+  bridge.bridgeInternals.commandDeps.spawnSync = spawnSync;
+  const errorSpy = mock(() => undefined);
+  const originalError = console.error;
+  console.error = errorSpy;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  try {
+    expect(bridge.bridgeInternals.clearStaleTmuxBridgeState(runDir)).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[loop] failed to remove Claude channel server "loop-bridge-8": spawn failed'
+    );
+    expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
+      undefined
+    );
+  } finally {
+    console.error = originalError;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("bridge MCP delivers pending codex messages to Claude as channel notifications", async () => {

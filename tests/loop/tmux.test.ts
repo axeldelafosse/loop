@@ -373,6 +373,7 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       "remain-on-exit",
       "on",
     ],
+    ["tmux", "has-session", "-t", "repo-loop-1"],
   ]);
   const typedByPane = new Map<string, string[]>();
   for (const entry of typed) {
@@ -393,6 +394,178 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   expect(manifest.codexRemoteUrl).toBe(codexRemoteUrl);
   expect(manifest.codexThreadId).toBe("codex-thread-1");
   expect(manifest.tmuxSession).toBe("repo-loop-1");
+});
+
+test("runInTmux releases local codex app-server handles after paired handoff", async () => {
+  const attaches: string[] = [];
+  let released = 0;
+  let sessionStarted = false;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  const delegated = await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      attach: (session: string) => {
+        attaches.push(session);
+      },
+      capturePane: (pane: string) =>
+        pane.endsWith(":0.1") ? "Ctrl+J newline" : "",
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => true,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      releasePersistentCodexSession: () => {
+        released += 1;
+      },
+      sendKeys: (): void => undefined,
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    { opts, task: "Ship feature" }
+  );
+
+  expect(delegated).toBe(true);
+  expect(attaches).toEqual(["repo-loop-1"]);
+  expect(released).toBe(1);
+});
+
+test("runInTmux closes the local codex app-server when the paired session is gone after attach", async () => {
+  const attaches: string[] = [];
+  let closed = 0;
+  let released = 0;
+  let sessionStarted = false;
+  let sessionAlive = false;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  const delegated = await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      attach: (session: string) => {
+        attaches.push(session);
+        sessionAlive = false;
+      },
+      capturePane: (pane: string) =>
+        pane.endsWith(":0.1") ? "Ctrl+J newline" : "",
+      closePersistentCodexSession: () => {
+        closed += 1;
+        return Promise.resolve();
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => true,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      releasePersistentCodexSession: () => {
+        released += 1;
+      },
+      sendKeys: (): void => undefined,
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionAlive
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+          sessionAlive = true;
+        }
+        if (
+          !sessionStarted &&
+          args[0] === "tmux" &&
+          args[1] === "split-window"
+        ) {
+          throw new Error("split before new-session");
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    { opts, task: "Ship feature" }
+  );
+
+  expect(delegated).toBe(true);
+  expect(attaches).toEqual(["repo-loop-1"]);
+  expect(closed).toBe(1);
+  expect(released).toBe(0);
 });
 
 test("runInTmux starts paired interactive tmux panes without a task", async () => {
@@ -1748,6 +1921,41 @@ test("tmux internals build shell command with escaping", () => {
   expect(tmuxInternals.buildShellCommand(["loop", "--prompt", "a'b c"])).toBe(
     "'loop' '--prompt' 'a'\\''b c'"
   );
+});
+
+test("tmux internals unref detached helper processes", () => {
+  const calls: Array<{ argv: string[]; options: Record<string, unknown> }> = [];
+  let unrefCount = 0;
+
+  tmuxInternals.spawnDetachedProcess(
+    ["loop", "__codex-tmux-proxy"],
+    { HOME: "/tmp/home" },
+    (argv, options) => {
+      calls.push({
+        argv: argv.map((value) => String(value)),
+        options: options as Record<string, unknown>,
+      });
+      return {
+        unref: () => {
+          unrefCount += 1;
+        },
+      } as ReturnType<typeof import("bun").spawn>;
+    }
+  );
+
+  expect(calls).toEqual([
+    {
+      argv: ["loop", "__codex-tmux-proxy"],
+      options: {
+        detached: process.platform !== "win32",
+        env: { HOME: "/tmp/home" },
+        stderr: "ignore",
+        stdin: "ignore",
+        stdout: "ignore",
+      },
+    },
+  ]);
+  expect(unrefCount).toBe(1);
 });
 
 test("tmux internals launch Claude in bypass mode", () => {
