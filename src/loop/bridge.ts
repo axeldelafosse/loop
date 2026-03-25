@@ -369,27 +369,42 @@ const tmuxSessionExists = (session: string): boolean => {
 const claudeChannelServerName = (runId: string): string =>
   `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
 
+const logClaudeChannelServerRemovalFailure = (
+  serverName: string,
+  detail: string
+): void => {
+  console.error(
+    `[loop] failed to remove Claude channel server "${serverName}": ${detail}`
+  );
+};
+
 const removeClaudeChannelServer = (runId: string): void => {
   if (!runId) {
     return;
   }
+  const serverName = claudeChannelServerName(runId);
   try {
-    bridgeCommandDeps.spawnSync(
-      [
-        "claude",
-        "mcp",
-        "remove",
-        "--scope",
-        "local",
-        claudeChannelServerName(runId),
-      ],
+    const result = bridgeCommandDeps.spawnSync(
+      ["claude", "mcp", "remove", "--scope", "local", serverName],
       {
-        stderr: "ignore",
+        stderr: "pipe",
         stdout: "ignore",
       }
     );
-  } catch {
+    if (result.exitCode === 0) {
+      return;
+    }
+    const stderr = result.stderr ? decodeOutput(result.stderr).trim() : "";
+    logClaudeChannelServerRemovalFailure(
+      serverName,
+      stderr || `exit code ${result.exitCode ?? "unknown"}`
+    );
+  } catch (error: unknown) {
     // Cleanup should not fail the bridge flow.
+    logClaudeChannelServerRemovalFailure(
+      serverName,
+      error instanceof Error ? error.message : String(error)
+    );
   }
 };
 
