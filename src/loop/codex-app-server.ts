@@ -9,6 +9,7 @@ type TransportMode = "app-server" | "exec";
 type Callback = (text: string) => void;
 export interface AppServerLaunchOptions {
   configValues?: string[];
+  orphanOnExit?: boolean;
   persistentThread?: boolean;
   resumeThreadId?: string;
   threadModel?: string;
@@ -422,6 +423,7 @@ class AppServerClient {
   private ws: import("./ws-client").WsClient | undefined;
   private closed = false;
   private lastThreadId = "";
+  private orphanOnExit = false;
   private persistentThread = false;
   private threadModel = "";
   private started = false;
@@ -451,14 +453,17 @@ class AppServerClient {
     if (!this.started) {
       return false;
     }
-    return !sameConfigValues(
-      this.configValues,
-      normalizeConfigValues(options.configValues)
+    return (
+      !sameConfigValues(
+        this.configValues,
+        normalizeConfigValues(options.configValues)
+      ) || this.orphanOnExit !== (options.orphanOnExit ?? false)
     );
   }
 
   configureLaunch(options: AppServerLaunchOptions = {}): void {
     this.configValues = normalizeConfigValues(options.configValues);
+    this.orphanOnExit = options.orphanOnExit ?? false;
     this.persistentThread = options.persistentThread ?? false;
     if (options.resumeThreadId !== undefined) {
       this.lastThreadId = options.resumeThreadId;
@@ -497,17 +502,26 @@ class AppServerClient {
         {
           detached: DETACH_CHILD_PROCESS,
           env: process.env,
-          stderr: "pipe",
-          stdin: "pipe",
-          stdout: "pipe",
+          stderr: this.orphanOnExit ? "ignore" : "pipe",
+          stdin: this.orphanOnExit ? "ignore" : "pipe",
+          stdout: this.orphanOnExit ? "ignore" : "pipe",
         }
       );
       this.child = child;
-      this.consumeFrames(child).finally(() => {
-        if (!this.closed) {
-          this.handleUnexpectedExit();
-        }
-      });
+      if (this.orphanOnExit) {
+        child.unref?.();
+        child.exited.then(() => {
+          if (!this.closed) {
+            this.handleUnexpectedExit();
+          }
+        });
+      } else {
+        this.consumeFrames(child).finally(() => {
+          if (!this.closed) {
+            this.handleUnexpectedExit();
+          }
+        });
+      }
       const ws = await this.connectWebSocket(connectUrl);
       this.ws = ws;
       ws.onmessage = (data) => {
@@ -619,6 +633,24 @@ class AppServerClient {
     }
     killChildProcess(this.child, "SIGTERM");
     await this.child.exited;
+    this.child = undefined;
+    this.connectUrl = "";
+    this.ready = false;
+    this.started = false;
+  }
+
+  release(): void {
+    this.closed = true;
+    this.failAll(new Error("codex app-server released"));
+    const ws = this.ws;
+    this.ws = undefined;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore close errors
+      }
+    }
     this.child = undefined;
     this.connectUrl = "";
     this.ready = false;
@@ -1219,5 +1251,13 @@ export const closeAppServer = async (): Promise<void> => {
     return;
   }
   await singleton.close();
+  singleton = undefined;
+};
+
+export const releaseAppServer = (): void => {
+  if (!singleton) {
+    return;
+  }
+  singleton.release();
   singleton = undefined;
 };

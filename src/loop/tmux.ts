@@ -22,7 +22,11 @@ import {
   touchRunManifest,
   updateRunManifest,
 } from "./run-state";
-import { startPersistentAgentSession } from "./runner";
+import {
+  closePersistentCodexSession,
+  releasePersistentCodexSession,
+  startPersistentAgentSession,
+} from "./runner";
 import type { Agent, Options } from "./types";
 
 export const TMUX_FLAG = "--tmux";
@@ -71,6 +75,7 @@ interface GitResult {
 interface TmuxDeps {
   attach: (session: string) => void;
   capturePane: (pane: string) => string;
+  closePersistentCodexSession: typeof closePersistentCodexSession;
   cwd: string;
   env: NodeJS.ProcessEnv;
   findBinary: (cmd: string) => boolean;
@@ -82,6 +87,7 @@ interface TmuxDeps {
   log: (line: string) => void;
   makeClaudeSessionId: () => string;
   preparePairedRun: typeof preparePairedRun;
+  releasePersistentCodexSession: typeof releasePersistentCodexSession;
   runGit: (cwd: string, args: string[]) => GitResult;
   sendKeys: (pane: string, keys: string[]) => void;
   sendText: (pane: string, text: string) => void;
@@ -660,7 +666,7 @@ const ensurePairedSessionIds = async (
     "codex",
     opts,
     manifest.codexThreadId || undefined,
-    undefined,
+    { codexLaunch: { orphanOnExit: true } },
     codexKind
   );
 
@@ -1081,6 +1087,8 @@ const defaultDeps = (): TmuxDeps => ({
     );
     return waitForCodexTmuxProxy(port);
   },
+  closePersistentCodexSession,
+  releasePersistentCodexSession,
   startPersistentAgentSession,
   spawn: (args: string[]) => {
     const result = spawnSync(args, { stderr: "pipe" });
@@ -1169,7 +1177,15 @@ export const runInTmux = async (
 
   deps.log(`[loop] started tmux session "${session}"`);
   deps.log(`[loop] attach with: tmux attach -t ${session}`);
-  return attachSessionIfInteractive(session, deps);
+  const handedOff = attachSessionIfInteractive(session, deps);
+  if (pairedLaunch && handedOff) {
+    if (sessionExists(session, deps.spawn)) {
+      deps.releasePersistentCodexSession();
+    } else {
+      await deps.closePersistentCodexSession();
+    }
+  }
+  return handedOff;
 };
 
 export const tmuxInternals = {

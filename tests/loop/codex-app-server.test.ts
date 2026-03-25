@@ -22,6 +22,7 @@ interface TestProcess {
   close: () => void;
   killSignals: string[];
   pid: number;
+  unrefCount: number;
   writes: string[];
 }
 
@@ -96,6 +97,14 @@ const installSpawn = (appServerModule: AppServerModule): void => {
         stdout.enqueue(`${JSON.stringify(frame)}\n`);
       };
 
+      const processState: TestProcess = {
+        close,
+        killSignals,
+        pid,
+        unrefCount: 0,
+        writes,
+      };
+
       const child = {
         exited,
         kill: (signal?: string) => {
@@ -103,6 +112,9 @@ const installSpawn = (appServerModule: AppServerModule): void => {
           close();
         },
         pid,
+        unref: () => {
+          processState.unrefCount += 1;
+        },
         stdin: {
           write: (chunk: string): void => {
             const lines = chunk.split("\n");
@@ -119,7 +131,7 @@ const installSpawn = (appServerModule: AppServerModule): void => {
         stderr: stderr.stream,
         stdout: stdout.stream,
       };
-      processes.push({ close, killSignals, pid, writes });
+      processes.push(processState);
       return child;
     }
   );
@@ -270,6 +282,31 @@ test("startAppServer exposes the app-server websocket URL", async () => {
   expect(appServer.getCodexAppServerUrl()).toMatch(LOCAL_WS_URL_RE);
 
   await appServer.closeAppServer();
+  expect(appServer.getCodexAppServerUrl()).toBe("");
+});
+
+test("releaseAppServer drops local handles without killing the detached child", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/start") {
+      write({ id: request.id, result: { thread: { id: "thread-1" } } });
+    }
+  };
+
+  await appServer.startAppServer({
+    orphanOnExit: true,
+    persistentThread: true,
+    threadModel: "test-model",
+  });
+
+  expect(appServer.getCodexAppServerUrl()).toMatch(LOCAL_WS_URL_RE);
+  expect(latestProcess()?.unrefCount).toBe(1);
+  appServer.releaseAppServer();
+  expect(latestProcess()?.killSignals).toEqual([]);
   expect(appServer.getCodexAppServerUrl()).toBe("");
 });
 
