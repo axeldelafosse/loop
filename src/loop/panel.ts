@@ -407,9 +407,9 @@ const trimText = (text: string, width: number): string => {
 };
 
 const rowId = (row: Row): string =>
-  row.session !== "-"
-    ? `${row.agent}:${row.session}`
-    : `${row.agent}:${row.pid}:${row.cwd}`;
+  row.session === "-"
+    ? `${row.agent}:${row.pid}:${row.cwd}`
+    : `${row.agent}:${row.session}`;
 
 const pidText = (pid: number): string => (pid > 0 ? String(pid) : "-");
 
