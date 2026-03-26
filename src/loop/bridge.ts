@@ -105,9 +105,8 @@ const normalizeLowerString = (value: unknown): string | undefined => {
 };
 
 const normalizeAgent = (value: unknown): Agent | undefined => {
-  const normalized = normalizeLowerString(value);
-  if (normalized === "claude" || normalized === "codex") {
-    return normalized;
+  if (value === "claude" || value === "codex") {
+    return value;
   }
   return undefined;
 };
@@ -726,7 +725,7 @@ const handleSendToAgentTool = async (
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      'send_to_agent requires a non-empty target ("claude" or "codex")'
+      "send_to_agent requires a non-empty target"
     );
     return;
   }
@@ -735,7 +734,7 @@ const handleSendToAgentTool = async (
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      `Unknown target "${normalizedTarget}"; expected "claude" or "codex"`
+      `Unknown target "${normalizedTarget}" - expected "claude" or "codex"`
     );
     return;
   }

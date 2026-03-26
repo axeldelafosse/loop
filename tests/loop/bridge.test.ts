@@ -321,8 +321,7 @@ test("bridge MCP send_to_agent rejects an empty target after trimming", async ()
   expect(JSON.parse(result.stdout)).toMatchObject({
     error: {
       code: -32_602,
-      message:
-        'send_to_agent requires a non-empty target ("claude" or "codex")',
+      message: "send_to_agent requires a non-empty target",
     },
     id: 1,
     jsonrpc: "2.0",
@@ -359,7 +358,7 @@ test("bridge MCP send_to_agent rejects an unknown normalized target", async () =
   expect(JSON.parse(result.stdout)).toMatchObject({
     error: {
       code: -32_602,
-      message: 'Unknown target "foo"; expected "claude" or "codex"',
+      message: 'Unknown target "foo" - expected "claude" or "codex"',
     },
     id: 1,
     jsonrpc: "2.0",
