@@ -770,7 +770,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   );
   expect(primaryPrompt).toContain("Wait briefly if it arrives");
   expect(primaryPrompt).toContain(
-    'Message Claude with "send_to_agent", not a human-facing message'
+    'Use "send_to_agent" with target: "claude" for Claude-facing messages'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
@@ -778,7 +778,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain("Wait for Codex to send you a targeted request");
   expect(peerPrompt).toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
+    'Use "send_to_agent" with target: "codex" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
   );
   expect(primaryPrompt).not.toContain("mcp__loop-bridge-1__ prefix");
   expect(peerPrompt).toContain("mcp__loop-bridge-1__ prefix");
@@ -797,7 +797,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain("No task has been assigned yet.");
   expect(primaryPrompt).toContain("Wait for the first human task");
   expect(primaryPrompt).toContain(
-    'Message Claude with "send_to_agent", not a human-facing message'
+    'Use "send_to_agent" with target: "claude" for Claude-facing messages'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
@@ -805,7 +805,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(peerPrompt).toContain("human clearly assigns you separate work");
   expect(peerPrompt).toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_to_agent" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
+    'Use "send_to_agent" with target: "codex" only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.'
   );
   expect(peerPrompt).toContain(
     "If you are answering Codex, use the bridge tools instead of a human-facing reply."

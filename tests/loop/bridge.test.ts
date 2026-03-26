@@ -253,6 +253,120 @@ test("bridge MCP send_to_agent queues a direct message through the CLI path", as
   rmSync(root, { recursive: true, force: true });
 });
 
+test("bridge MCP send_to_agent normalizes target case and whitespace", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    [
+      encodeFrame({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: {
+            message: "ship it",
+            target: "  CLAUDE  ",
+          },
+          name: "send_to_agent",
+        },
+      }),
+      "\n",
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("queued");
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([
+    expect.objectContaining({
+      message: "ship it",
+      source: "codex",
+      target: "claude",
+    }),
+  ]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP send_to_agent rejects an empty target after trimming", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    [
+      encodeFrame({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: {
+            message: "ship it",
+            target: "   ",
+          },
+          name: "send_to_agent",
+        },
+      }),
+      "\n",
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    error: {
+      code: -32_602,
+      message:
+        'send_to_agent requires a non-empty target ("claude" or "codex")',
+    },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP send_to_agent rejects an unknown normalized target", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    [
+      encodeFrame({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: {
+            message: "ship it",
+            target: "  FOO  ",
+          },
+          name: "send_to_agent",
+        },
+      }),
+      "\n",
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    error: {
+      code: -32_602,
+      message: 'Unknown target "foo"; expected "claude" or "codex"',
+    },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("bridge MCP handles standard empty-list and ping requests through the CLI path", async () => {
   const root = makeTempDir();
   const runDir = join(root, "run");

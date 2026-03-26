@@ -96,9 +96,18 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value : undefined;
 
+const normalizeLowerString = (value: unknown): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+};
+
 const normalizeAgent = (value: unknown): Agent | undefined => {
-  if (value === "claude" || value === "codex") {
-    return value;
+  const normalized = normalizeLowerString(value);
+  if (normalized === "claude" || normalized === "codex") {
+    return normalized;
   }
   return undefined;
 };
@@ -435,7 +444,7 @@ const claudeChannelInstructions = (): string =>
     `Messages from the Codex agent arrive as <channel source="${BRIDGE_SERVER}" chat_id="..." user="${CLAUDE_CHANNEL_USER}" ...>.`,
     'When you are replying to an inbound channel message, use the "reply" tool and pass back the same chat_id.',
     "Never answer the human when the inbound message came from Codex. Send the response back through the bridge tools instead.",
-    'Use the "send_to_agent" tool for proactive messages to Codex that are not direct replies to a channel message.',
+    'Use the "send_to_agent" tool with target: "codex" for proactive messages that are not direct replies to a channel message.',
     'Use "bridge_status" only when direct delivery appears stuck.',
   ].join("\n");
 
@@ -711,13 +720,22 @@ const handleSendToAgentTool = async (
   source: Agent,
   args: Record<string, unknown>
 ): Promise<void> => {
-  const target = normalizeAgent(args.target);
+  const normalizedTarget = normalizeLowerString(args.target);
   const message = asString(args.message);
+  if (!normalizedTarget) {
+    writeError(
+      id,
+      MCP_INVALID_PARAMS,
+      'send_to_agent requires a non-empty target ("claude" or "codex")'
+    );
+    return;
+  }
+  const target = normalizeAgent(normalizedTarget);
   if (!target) {
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      "send_to_agent requires target=claude|codex"
+      `Unknown target "${normalizedTarget}"; expected "claude" or "codex"`
     );
     return;
   }
