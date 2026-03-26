@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   access,
   chmod,
@@ -18,6 +19,46 @@ const CODEX_ALIAS_NAME = IS_WINDOWS ? "codex-loop.cmd" : "codex-loop";
 const CANDIDATE_BINARIES = IS_WINDOWS
   ? ["loop.exe", "loop"]
   : ["loop", "loop.exe"];
+const TMUX_NOTE = "Note: tmux is not installed.";
+const TMUX_DEFAULT_MODE_NOTE =
+  "The default 'loop' command opens a paired tmux workspace and will fail until tmux is installed.";
+const TMUX_MACOS_HINT = "brew install tmux";
+const TMUX_LINUX_HINT = "your package manager (for example: apt install tmux)";
+
+const tmuxInstallHint = (
+  platform: NodeJS.Platform = process.platform
+): string => {
+  if (platform === "darwin") {
+    return TMUX_MACOS_HINT;
+  }
+  if (platform === "linux") {
+    return TMUX_LINUX_HINT;
+  }
+  return "install tmux";
+};
+
+const tmuxNudgeLines = (
+  platform: NodeJS.Platform = process.platform
+): string[] => [
+  "",
+  TMUX_NOTE,
+  TMUX_DEFAULT_MODE_NOTE,
+  `Install tmux with: ${tmuxInstallHint(platform)}`,
+];
+
+const hasTmuxInstalled = (): boolean => {
+  const result = spawnSync("tmux", ["-V"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+};
+
+const logMissingTmuxNudge = (): void => {
+  if (IS_WINDOWS || hasTmuxInstalled()) {
+    return;
+  }
+  for (const line of tmuxNudgeLines()) {
+    console.log(line);
+  }
+};
 
 const findBuiltBinary = async (): Promise<string> => {
   for (const name of CANDIDATE_BINARIES) {
@@ -76,23 +117,32 @@ const installBinary = async (): Promise<void> => {
 
   if (IS_WINDOWS) {
     await copyFile(source, target);
-    console.log(`Installed loop -> ${target}`);
-    await installAliases();
-    return;
-  }
-
-  try {
-    await symlink(source, target);
-  } catch {
-    await copyFile(source, target);
+  } else {
+    try {
+      await symlink(source, target);
+    } catch {
+      await copyFile(source, target);
+    }
   }
 
   console.log(`Installed loop -> ${target}`);
   await installAliases();
+  logMissingTmuxNudge();
 };
 
-installBinary().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[loop] install failed: ${message}`);
-  process.exit(1);
-});
+export const installInternals = {
+  tmuxInstallHint,
+  tmuxNudgeLines,
+};
+
+const main = async (): Promise<void> => {
+  await installBinary();
+};
+
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[loop] install failed: ${message}`);
+    process.exit(1);
+  });
+}
