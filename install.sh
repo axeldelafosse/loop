@@ -55,6 +55,15 @@ case "$(uname -s)" in
   *) echo "Windows is not supported" >&2; exit 1 ;;
 esac
 
+tmux_install_hint() {
+  if [ "$os" = "macos" ]; then
+    echo "brew install tmux"
+    return
+  fi
+
+  echo "your package manager (for example: apt install tmux)"
+}
+
 case "$(uname -m)" in
   x86_64|amd64) arch="x64" ;;
   arm64|aarch64) arch="arm64" ;;
@@ -151,6 +160,13 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
   echo "Add this to your shell profile:"
   echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo ""
+  echo "Note: tmux is not installed."
+  echo "The default 'loop' command opens a paired tmux workspace and will fail until tmux is installed."
+  echo "Install tmux with: $(tmux_install_hint)"
 fi
 
 echo ""
