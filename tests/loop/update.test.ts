@@ -151,6 +151,37 @@ test("startAutoUpdateCheck does not block", async () => {
   expect(elapsed).toBeLessThan(50);
 });
 
+test("awaitAutoUpdateCheck respects timeout for awaited startup path", async () => {
+  const originalExecPath = process.execPath;
+  const originalFetch = globalThis.fetch;
+
+  Object.defineProperty(process, "execPath", {
+    value: "/tmp/loop-test-binary",
+    configurable: true,
+  });
+  globalThis.fetch = mock(
+    () => new Promise<Response>(() => undefined)
+  ) as typeof fetch;
+
+  try {
+    const { awaitAutoUpdateCheck } = await import(
+      `../../src/loop/update?awaittimeout=${Date.now()}`
+    );
+    const start = Date.now();
+    await awaitAutoUpdateCheck(20);
+    expect(Date.now() - start).toBeLessThan(200);
+  } finally {
+    Object.defineProperty(process, "execPath", {
+      value: originalExecPath,
+      configurable: true,
+    });
+    globalThis.fetch = originalFetch;
+    if (existsSync(CHECK_FILE)) {
+      unlinkSync(CHECK_FILE);
+    }
+  }
+});
+
 // --- throttle behavior ---
 
 test("auto-check respects throttle interval", async () => {

@@ -46,6 +46,7 @@ interface CliModuleDeps {
 
 interface UpdateModuleDeps {
   applyStagedUpdateOnStartup?: () => Promise<void>;
+  awaitAutoUpdateCheck?: (timeoutMs?: number) => Promise<void>;
   handleManualUpdateCommand?: (argv: string[]) => Promise<boolean>;
   startAutoUpdateCheck?: () => void;
 }
@@ -69,6 +70,9 @@ const loadRunCli = async (
   );
   const handleManualMock = mock(
     updateOverrides.handleManualUpdateCommand ?? (async () => false)
+  );
+  const awaitAutoUpdateCheckMock = mock(
+    updateOverrides.awaitAutoUpdateCheck ?? (async () => undefined)
   );
   const startAutoCheckMock = mock(
     updateOverrides.startAutoUpdateCheck ?? (() => undefined)
@@ -97,6 +101,7 @@ const loadRunCli = async (
   mock.module("../src/loop/update-deps", () => ({
     updateDeps: {
       applyStagedUpdateOnStartup: applyStagedMock,
+      awaitAutoUpdateCheck: awaitAutoUpdateCheckMock,
       handleManualUpdateCommand: handleManualMock,
       startAutoUpdateCheck: startAutoCheckMock,
     },
@@ -122,6 +127,7 @@ const loadRunCli = async (
     maybeEnterWorktreeMock,
     parseArgsMock,
     resolveTaskMock,
+    awaitAutoUpdateCheckMock,
     runCli,
     runInTmuxMock,
     runLoopMock,
@@ -138,10 +144,12 @@ test("runCli defaults empty argv to paired interactive tmux mode", async () => {
     maybeEnterWorktreeMock,
     parseArgsMock,
     resolveTaskMock,
+    awaitAutoUpdateCheckMock,
     runCli,
     runInTmuxMock,
     runLoopMock,
     runPanelMock,
+    startAutoCheckMock,
   } = await loadRunCli({
     parseArgs: () => opts,
     runInTmux: () => true,
@@ -151,6 +159,8 @@ test("runCli defaults empty argv to paired interactive tmux mode", async () => {
 
   expect(runPanelMock).not.toHaveBeenCalled();
   expect(parseArgsMock).toHaveBeenCalledWith(["--tmux"]);
+  expect(awaitAutoUpdateCheckMock).toHaveBeenCalledTimes(1);
+  expect(startAutoCheckMock).not.toHaveBeenCalled();
   expect(maybeEnterWorktreeMock).toHaveBeenCalledTimes(1);
   expect(runInTmuxMock).toHaveBeenCalledWith(["--tmux"], undefined, {
     opts,
@@ -170,11 +180,13 @@ test("runCli starts panel for dashboard command", async () => {
     runInTmuxMock,
     runLoopMock,
     runPanelMock,
+    startAutoCheckMock,
   } = await loadRunCli();
 
   await runCli(["dashboard"]);
 
   expect(runPanelMock).toHaveBeenCalledTimes(1);
+  expect(startAutoCheckMock).toHaveBeenCalledTimes(1);
   expect(maybeEnterWorktreeMock).not.toHaveBeenCalled();
   expect(runInTmuxMock).not.toHaveBeenCalled();
   expect(parseArgsMock).not.toHaveBeenCalled();
@@ -250,11 +262,13 @@ test("runCli starts paired interactive tmux without resolving a task", async () 
     closeAppServerMock,
     closeClaudeSdkMock,
     maybeEnterWorktreeMock,
+    awaitAutoUpdateCheckMock,
     runCli,
     runInTmuxMock,
     resolveTaskMock,
     runLoopMock,
     runPanelMock,
+    startAutoCheckMock,
   } = await loadRunCli({
     parseArgs: () => opts,
     runInTmux: () => true,
@@ -264,6 +278,8 @@ test("runCli starts paired interactive tmux without resolving a task", async () 
 
   expect(runPanelMock).not.toHaveBeenCalled();
   expect(maybeEnterWorktreeMock).toHaveBeenCalledWith(opts);
+  expect(awaitAutoUpdateCheckMock).toHaveBeenCalledTimes(1);
+  expect(startAutoCheckMock).not.toHaveBeenCalled();
   expect(resolveTaskMock).not.toHaveBeenCalled();
   expect(runInTmuxMock).toHaveBeenCalledWith(["--tmux"], undefined, { opts });
   expect(runLoopMock).not.toHaveBeenCalled();
@@ -450,34 +466,40 @@ test("runCli keeps codex-only tmux flow intact", async () => {
 test("runCli calls update hooks in correct order before task flow", async () => {
   const calls: string[] = [];
   const opts = makeOptions();
-  const { runCli, applyStagedMock, handleManualMock, startAutoCheckMock } =
-    await loadRunCli(
-      {
-        parseArgs: () => opts,
-        resolveTask: () => {
-          calls.push("resolveTask");
-          return Promise.resolve("ship feature");
-        },
+  const {
+    runCli,
+    applyStagedMock,
+    handleManualMock,
+    awaitAutoUpdateCheckMock,
+    startAutoCheckMock,
+  } = await loadRunCli(
+    {
+      parseArgs: () => opts,
+      resolveTask: () => {
+        calls.push("resolveTask");
+        return Promise.resolve("ship feature");
       },
-      {
-        applyStagedUpdateOnStartup: () => {
-          calls.push("applyStaged");
-          return Promise.resolve();
-        },
-        handleManualUpdateCommand: () => {
-          calls.push("handleManual");
-          return Promise.resolve(false);
-        },
-        startAutoUpdateCheck: () => {
-          calls.push("autoCheck");
-        },
-      }
-    );
+    },
+    {
+      applyStagedUpdateOnStartup: () => {
+        calls.push("applyStaged");
+        return Promise.resolve();
+      },
+      handleManualUpdateCommand: () => {
+        calls.push("handleManual");
+        return Promise.resolve(false);
+      },
+      startAutoUpdateCheck: () => {
+        calls.push("autoCheck");
+      },
+    }
+  );
 
   await runCli(["--proof", "verify with tests"]);
 
   expect(applyStagedMock).toHaveBeenCalledTimes(1);
   expect(handleManualMock).toHaveBeenCalledTimes(1);
+  expect(awaitAutoUpdateCheckMock).not.toHaveBeenCalled();
   expect(startAutoCheckMock).toHaveBeenCalledTimes(1);
   expect(calls).toEqual([
     "applyStaged",
@@ -485,6 +507,80 @@ test("runCli calls update hooks in correct order before task flow", async () => 
     "autoCheck",
     "resolveTask",
   ]);
+});
+
+test("runCli awaits auto-update before handing off promptless paired tmux startup", async () => {
+  const calls: string[] = [];
+  const opts = { ...makeOptions(), proof: "", tmux: true };
+  let resolveAutoUpdate = () => undefined;
+  const autoUpdatePromise = new Promise<void>((resolve) => {
+    resolveAutoUpdate = resolve;
+  });
+  const {
+    awaitAutoUpdateCheckMock,
+    runCli,
+    runInTmuxMock,
+    startAutoCheckMock,
+  } = await loadRunCli(
+    {
+      parseArgs: () => opts,
+      runInTmux: () => {
+        calls.push("runInTmux");
+        return true;
+      },
+    },
+    {
+      awaitAutoUpdateCheck: async () => {
+        calls.push("awaitAutoUpdate");
+        await autoUpdatePromise;
+        calls.push("autoUpdateResolved");
+      },
+      startAutoUpdateCheck: () => {
+        calls.push("startAutoUpdateCheck");
+      },
+    }
+  );
+
+  const pending = runCli(["--tmux"]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(calls).toEqual(["awaitAutoUpdate"]);
+  expect(runInTmuxMock).not.toHaveBeenCalled();
+  expect(startAutoCheckMock).not.toHaveBeenCalled();
+
+  resolveAutoUpdate();
+  await pending;
+
+  expect(awaitAutoUpdateCheckMock).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual(["awaitAutoUpdate", "autoUpdateResolved", "runInTmux"]);
+});
+
+test("runCli keeps promptless paired tmux inside tmux on fire-and-forget auto-update", async () => {
+  const originalTmux = process.env.TMUX;
+  const opts = { ...makeOptions(), proof: "", tmux: true };
+  const { awaitAutoUpdateCheckMock, runCli, startAutoCheckMock } =
+    await loadRunCli(
+      {
+        parseArgs: () => opts,
+        runInTmux: () => false,
+      },
+      {
+        startAutoUpdateCheck: () => undefined,
+      }
+    );
+
+  process.env.TMUX = "1";
+
+  try {
+    await expect(runCli(["--tmux"])).rejects.toThrow(
+      "[loop] interactive paired tmux mode must be started outside tmux."
+    );
+  } finally {
+    process.env.TMUX = originalTmux;
+  }
+
+  expect(awaitAutoUpdateCheckMock).not.toHaveBeenCalled();
+  expect(startAutoCheckMock).toHaveBeenCalledTimes(1);
 });
 
 test("runCli returns early when handleManualUpdateCommand returns true", async () => {

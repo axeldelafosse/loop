@@ -12,7 +12,7 @@ import {
   runCodexTmuxProxy,
 } from "./loop/codex-tmux-proxy";
 import { cliDeps } from "./loop/deps";
-import type { Agent } from "./loop/types";
+import type { Agent, Options } from "./loop/types";
 import { updateDeps } from "./loop/update-deps";
 
 const TMUX_DETACH_HINT = "[loop] detach with Ctrl-b d";
@@ -20,6 +20,15 @@ const DASHBOARD_COMMAND = "dashboard";
 const DEFAULT_TMUX_ARGV = ["--tmux"];
 const INTERACTIVE_TMUX_ERROR =
   "[loop] interactive paired tmux mode must be started outside tmux.";
+
+const isPromptlessPairedTmuxLaunch = (opts: Options): boolean =>
+  opts.tmux &&
+  opts.pairedMode &&
+  !opts.promptInput?.trim() &&
+  !opts.proof.trim();
+
+const shouldAwaitAutoUpdate = (opts: Options): boolean =>
+  !process.env.TMUX && isPromptlessPairedTmuxLaunch(opts);
 
 const parseBridgeArgs = (argv: string[]): { runDir: string; source: Agent } => {
   const [runDir, source] = argv;
@@ -78,16 +87,20 @@ export const runCli = async (argv: string[]): Promise<void> => {
     if (await updateDeps.handleManualUpdateCommand(normalizedArgv)) {
       return;
     }
-    updateDeps.startAutoUpdateCheck();
 
     if (process.env.TMUX) {
       console.log(TMUX_DETACH_HINT);
     }
     if (normalizedArgv[0]?.toLowerCase() === DASHBOARD_COMMAND) {
+      updateDeps.startAutoUpdateCheck();
       await cliDeps.runPanel();
       return;
     }
     const opts = cliDeps.parseArgs(normalizedArgv);
+    const awaitAutoUpdate = shouldAwaitAutoUpdate(opts);
+    if (!awaitAutoUpdate) {
+      updateDeps.startAutoUpdateCheck();
+    }
     if (
       opts.tmux &&
       !opts.pairedMode &&
@@ -101,12 +114,10 @@ export const runCli = async (argv: string[]): Promise<void> => {
       console.log(gitWarning);
     }
     await cliDeps.maybeEnterWorktree(opts);
-    if (
-      opts.tmux &&
-      opts.pairedMode &&
-      !opts.promptInput?.trim() &&
-      !opts.proof.trim()
-    ) {
+    if (awaitAutoUpdate) {
+      await updateDeps.awaitAutoUpdateCheck();
+    }
+    if (isPromptlessPairedTmuxLaunch(opts)) {
       if (await cliDeps.runInTmux(normalizedArgv, undefined, { opts })) {
         shouldCloseAgents = false;
         return;

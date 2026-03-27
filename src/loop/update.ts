@@ -19,6 +19,7 @@ const STAGED_BINARY = join(CACHE_DIR, "loop-staged");
 const METADATA_FILE = join(CACHE_DIR, "metadata.json");
 const CHECK_FILE = join(CACHE_DIR, "last-check.json");
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const AUTO_UPDATE_TIMEOUT_MS = 5000;
 const VERSION_PREFIX_RE = /^v/;
 const WHITESPACE_RE = /\s+/;
 
@@ -227,6 +228,29 @@ export const applyStagedUpdateOnStartup = (): Promise<void> => {
   return Promise.resolve();
 };
 
+const resolveAutoUpdateAssetName = (): string | undefined => {
+  if (isDevMode()) {
+    return undefined;
+  }
+  if (shouldThrottle()) {
+    return undefined;
+  }
+
+  try {
+    const assetName = getAssetName();
+    saveCheckTime();
+    return assetName;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[loop] auto-update skipped: ${msg}`);
+    return undefined;
+  }
+};
+
+const runAutoUpdateCheckForAsset = async (assetName: string): Promise<void> => {
+  await checkAndStage(assetName, true);
+};
+
 const checkAndStage = async (
   assetName: string,
   silent: boolean
@@ -326,25 +350,46 @@ export const handleManualUpdateCommand = async (
   return true;
 };
 
-export const startAutoUpdateCheck = (): void => {
-  if (isDevMode()) {
-    return;
-  }
-  if (shouldThrottle()) {
-    return;
-  }
+const withTimeout = async (
+  operation: Promise<void>,
+  timeoutMs: number
+): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  let assetName: string;
   try {
-    assetName = getAssetName();
-    saveCheckTime();
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[loop] auto-update skipped: ${msg}`);
+    await Promise.race([
+      operation,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
+export const awaitAutoUpdateCheck = async (
+  timeoutMs = AUTO_UPDATE_TIMEOUT_MS
+): Promise<void> => {
+  const assetName = resolveAutoUpdateAssetName();
+  if (!assetName) {
     return;
   }
 
-  checkAndStage(assetName, true).catch(() => {
+  const operation = runAutoUpdateCheckForAsset(assetName).catch(() => {
     // Network/download failures are best-effort in auto mode
   });
+  if (timeoutMs <= 0) {
+    await operation;
+    return;
+  }
+
+  await withTimeout(operation, timeoutMs);
+};
+
+export const startAutoUpdateCheck = (): void => {
+  awaitAutoUpdateCheck(0).catch(() => undefined);
 };
