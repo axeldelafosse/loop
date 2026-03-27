@@ -47,6 +47,21 @@ const encodeFrame = (payload: unknown): string => {
   return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
 };
 const encodeLine = (payload: unknown): string => `${JSON.stringify(payload)}\n`;
+const parseJsonLines = (text: string): Record<string, unknown>[] =>
+  text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+const listedTools = (stdout: string): Record<string, unknown>[] => {
+  const toolsResponse = parseJsonLines(stdout).find(
+    (response) => response.id === 6
+  );
+  return (
+    (toolsResponse?.result as { tools?: Record<string, unknown>[] } | undefined)
+      ?.tools ?? []
+  );
+};
 
 const runBridgeProcess = async (
   runDir: string,
@@ -385,7 +400,7 @@ test("bridge MCP send_to_agent rejects an unknown normalized target", async () =
   rmSync(root, { recursive: true, force: true });
 });
 
-test("bridge MCP handles standard empty-list and ping requests through the CLI path", async () => {
+test("bridge MCP handles standard empty-list and ping requests through the Claude CLI path", async () => {
   const root = makeTempDir();
   const runDir = join(root, "run");
   mkdirSync(runDir, { recursive: true });
@@ -453,9 +468,106 @@ test("bridge MCP handles standard empty-list and ping requests through the CLI p
   expect(result.stdout).toContain('"id":5');
   expect(result.stdout).toContain('"resourceTemplates":[]');
   expect(result.stdout).toContain('"id":6');
-  expect(result.stdout).toContain('"name":"reply"');
-  expect(result.stdout).toContain('"name":"send_to_agent"');
-  expect(result.stdout).toContain('"name":"receive_messages"');
+  const tools = listedTools(result.stdout);
+  expect(tools).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "reply",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "send_to_agent",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: true,
+        },
+        name: "bridge_status",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: true,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "receive_messages",
+      }),
+    ])
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP advertises only the Codex-visible bridge tools", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    [
+      encodeLine({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+        },
+      }),
+      encodeLine({
+        id: 6,
+        jsonrpc: "2.0",
+        method: "tools/list",
+        params: {},
+      }),
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).not.toContain('"claude/channel":{}');
+  const tools = listedTools(result.stdout);
+  expect(tools).toHaveLength(3);
+  expect(tools).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "send_to_agent",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: true,
+        },
+        name: "bridge_status",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: true,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "receive_messages",
+      }),
+    ])
+  );
+  expect(tools.some((tool) => tool.name === "reply")).toBe(false);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -1226,6 +1338,12 @@ test("bridge config helper builds the bridge MCP entry point for Codex", async (
       runDir,
       "codex",
     ])}`,
+    "-c",
+    'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
+    "-c",
+    'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
+    "-c",
+    'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
   ]);
 
   rmSync(root, { recursive: true, force: true });

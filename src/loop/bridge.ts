@@ -34,6 +34,21 @@ const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 const HEADER_SEPARATOR = "\r\n\r\n";
 const MCP_INVALID_PARAMS = -32_602;
 const MCP_METHOD_NOT_FOUND = -32_601;
+const MUTATING_TOOL_ANNOTATIONS = {
+  destructiveHint: false,
+  openWorldHint: false,
+  readOnlyHint: false,
+};
+const RECEIVE_MESSAGES_TOOL_ANNOTATIONS = {
+  destructiveHint: true,
+  openWorldHint: false,
+  readOnlyHint: false,
+};
+const READ_ONLY_TOOL_ANNOTATIONS = {
+  destructiveHint: false,
+  openWorldHint: false,
+  readOnlyHint: true,
+};
 
 interface BridgeCallParams {
   arguments?: Record<string, unknown>;
@@ -328,6 +343,7 @@ const handleBridgeRequest = async (
             ...(source === "claude"
               ? [
                   {
+                    annotations: MUTATING_TOOL_ANNOTATIONS,
                     description:
                       "Reply to the active Codex channel conversation and deliver the response back to Codex.",
                     inputSchema: {
@@ -344,6 +360,7 @@ const handleBridgeRequest = async (
                 ]
               : []),
             {
+              annotations: MUTATING_TOOL_ANNOTATIONS,
               description: "Send an explicit message to the paired agent.",
               inputSchema: {
                 additionalProperties: false,
@@ -360,6 +377,7 @@ const handleBridgeRequest = async (
               name: "send_to_agent",
             },
             {
+              annotations: READ_ONLY_TOOL_ANNOTATIONS,
               description:
                 "Inspect the current paired run and pending bridge messages.",
               inputSchema: {
@@ -370,6 +388,7 @@ const handleBridgeRequest = async (
               name: "bridge_status",
             },
             {
+              annotations: RECEIVE_MESSAGES_TOOL_ANNOTATIONS,
               description:
                 "Read and clear pending bridge messages addressed to you.",
               inputSchema: {

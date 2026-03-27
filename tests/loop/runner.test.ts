@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { resolve } from "node:path";
+import { buildCodexBridgeConfigArgs } from "../../src/loop/bridge-config";
 import type { Options, RunResult } from "../../src/loop/types";
 
 interface AppServerModule {
@@ -118,7 +119,9 @@ let startPersistentAgentSession: (
 let buildCommand: (
   agent: string,
   prompt: string,
-  model: string
+  model: string,
+  sessionId?: string,
+  opts?: Options
 ) => { args: string[]; cmd: string };
 const startAppServer: MockFn<
   (launchOptions?: {
@@ -247,6 +250,27 @@ test("buildCommand uses the provided Claude model", () => {
   const modelArgIndex = command.args.indexOf("--model");
   expect(modelArgIndex).toBeGreaterThan(-1);
   expect(command.args[modelArgIndex + 1]).toBe("sonnet-review");
+});
+
+test("buildCommand carries Codex bridge approval config for legacy exec", () => {
+  const codexMcpConfigArgs = buildCodexBridgeConfigArgs(
+    "/tmp/loop-run",
+    "codex"
+  );
+  const command = buildCommand(
+    "codex",
+    "say hello",
+    "test-model",
+    undefined,
+    makeOptions({ codexMcpConfigArgs })
+  );
+  const yoloIndex = command.args.indexOf("--yolo");
+
+  expect(command.cmd).toBe("codex");
+  expect(yoloIndex).toBeGreaterThan(-1);
+  expect(command.args.slice(0, yoloIndex)).toEqual(
+    expect.arrayContaining(codexMcpConfigArgs)
+  );
 });
 
 test("runAgent honors CODEX_TRANSPORT=exec and uses legacy codex exec", async () => {
