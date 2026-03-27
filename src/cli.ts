@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
+import { runBridgeMcpServer } from "./loop/bridge";
 import {
   BRIDGE_SUBCOMMAND,
   BRIDGE_WORKER_SUBCOMMAND,
-  runBridgeMcpServer,
-  runBridgeWorker,
-} from "./loop/bridge";
+} from "./loop/bridge-constants";
+import { runBridgeWorker } from "./loop/bridge-runtime";
 import { closeClaudeSdk } from "./loop/claude-sdk-server";
 import { closeAppServer } from "./loop/codex-app-server";
 import {

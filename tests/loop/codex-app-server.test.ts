@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { buildCodexBridgeConfigArgs } from "../../src/loop/bridge";
+import { buildCodexBridgeConfigArgs } from "../../src/loop/bridge-config";
 import type { Options } from "../../src/loop/types";
 
 interface RequestFrame {

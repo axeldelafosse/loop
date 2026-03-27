@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "bun";
-import { BRIDGE_SERVER, BRIDGE_SUBCOMMAND } from "./bridge";
+import { BRIDGE_SERVER, BRIDGE_SUBCOMMAND } from "./bridge-constants";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
   CODEX_TMUX_PROXY_SUBCOMMAND,
