@@ -9,10 +9,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  bridgeInternals,
-  readPendingBridgeMessages,
-} from "../../src/loop/bridge";
+import { bridgeInternals } from "../../src/loop/bridge";
+import { readPendingBridgeMessages } from "../../src/loop/bridge-store";
 import {
   createRunManifest,
   readRunManifest,

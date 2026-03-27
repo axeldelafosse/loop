@@ -2,11 +2,11 @@ import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { serve, spawnSync } from "bun";
 import {
-  type BridgeMessage,
+  acknowledgeBridgeDelivery,
   clearStaleTmuxBridgeState,
-  markBridgeMessage,
-  readPendingBridgeMessages,
-} from "./bridge";
+  readNextPendingBridgeMessageForTarget,
+} from "./bridge-runtime";
+import type { BridgeMessage } from "./bridge-store";
 import { findFreePort } from "./ports";
 import { isActiveRunState, readRunManifest } from "./run-state";
 import { connectWs, type WsClient } from "./ws-client";
@@ -395,12 +395,7 @@ class CodexTmuxProxy {
       this.turnInProgress = false;
       return;
     }
-    markBridgeMessage(
-      this.runDir,
-      message,
-      "delivered",
-      "sent to codex tmux proxy"
-    );
+    acknowledgeBridgeDelivery(this.runDir, message, "sent to codex tmux proxy");
   }
 
   private handleNotification(frame: JsonFrame): void {
@@ -466,9 +461,7 @@ class CodexTmuxProxy {
     if (this.turnInProgress || this.bridgeRequests.size > 0) {
       return;
     }
-    const message = readPendingBridgeMessages(this.runDir).find(
-      (entry) => entry.target === "codex"
-    );
+    const message = readNextPendingBridgeMessageForTarget(this.runDir, "codex");
     if (!message) {
       return;
     }

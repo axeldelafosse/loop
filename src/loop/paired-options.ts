@@ -1,4 +1,7 @@
-import { buildCodexBridgeConfigArgs, ensureClaudeBridgeConfig } from "./bridge";
+import {
+  buildCodexBridgeConfigArgs,
+  ensureClaudeBridgeConfig,
+} from "./bridge-config";
 import {
   createRunManifest,
   ensureRunStorage,

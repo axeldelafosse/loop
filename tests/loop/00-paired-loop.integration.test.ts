@@ -2,10 +2,8 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import {
-  bridgeInternals,
-  readPendingBridgeMessages,
-} from "../../src/loop/bridge";
+import { bridgeInternals } from "../../src/loop/bridge";
+import { readPendingBridgeMessages } from "../../src/loop/bridge-store";
 import { readRunManifest, resolveRunStorage } from "../../src/loop/run-state";
 import type { Agent, Options, RunResult } from "../../src/loop/types";
 

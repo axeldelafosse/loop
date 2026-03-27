@@ -1,5 +1,8 @@
 import { createInterface } from "node:readline/promises";
-import { markBridgeMessage, readPendingBridgeMessages } from "./bridge";
+import {
+  acknowledgeBridgeDelivery,
+  readNextPendingBridgeMessage,
+} from "./bridge-runtime";
 import { getLastClaudeSessionId } from "./claude-sdk-server";
 import { getLastCodexThreadId } from "./codex-app-server";
 import {
@@ -263,7 +266,7 @@ const drainBridge = async (
   let deliveredToPrimary = 0;
 
   for (let hop = 0; hop < MAX_BRIDGE_HOPS; hop += 1) {
-    const message = readPendingBridgeMessages(state.storage.runDir)[0];
+    const message = readNextPendingBridgeMessage(state.storage.runDir);
     if (!message) {
       return { deliveredToPrimary };
     }
@@ -284,7 +287,7 @@ const drainBridge = async (
       return { deliveredToPrimary };
     }
 
-    markBridgeMessage(state.storage.runDir, message, "delivered");
+    acknowledgeBridgeDelivery(state.storage.runDir, message);
     if (message.target === state.options.agent) {
       deliveredToPrimary += 1;
     }
