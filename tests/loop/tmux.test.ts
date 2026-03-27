@@ -271,6 +271,9 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
         }
         if (args[0] === "tmux" && args[1] === "new-session") {
           sessionStarted = true;
+          return { exitCode: 0, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "display-message") {
           return { exitCode: 0, stderr: "", stdout: "%10\n" };
         }
         if (args[0] === "tmux" && args[1] === "split-window") {
@@ -441,6 +444,9 @@ test("runInTmux honors tmux base-index and pane-base-index in paired mode", asyn
         }
         if (args[0] === "tmux" && args[1] === "new-session") {
           sessionStarted = true;
+          return { exitCode: 0, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "display-message") {
           return { exitCode: 0, stderr: "", stdout: "%10\n" };
         }
         if (
