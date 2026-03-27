@@ -243,6 +243,9 @@ const buildInteractivePrimaryPrompt = (
   parts.push(pairedBridgeGuidance(opts.agent, runId));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
+    `If the human asks for plan mode, write PLAN.md first, ask ${peer} for a plan review, iterate on PLAN.md, then ask the human to review the plan before implementing.`
+  );
+  parts.push(
     `Wait for the first human task. Do not implement until one arrives. Once it does, coordinate directly with ${peer} and keep the paired review workflow intact. Do not send a message to ${peer} until then.`
   );
   return parts.join("\n\n");
@@ -262,6 +265,9 @@ const buildInteractivePeerPrompt = (
   appendProofPrompt(parts, opts.proof);
   parts.push(pairedBridgeGuidance(agent, runId));
   parts.push(pairedWorkflowGuidance(opts, agent));
+  parts.push(
+    `If ${primary} asks for a plan review, review PLAN.md only, suggest concrete fixes, and wait for the next request.`
+  );
   parts.push(
     `Wait for ${primary} to provide a concrete task or review request. Do not send a message to ${primary} yet. If the human clearly assigns you separate work in this pane, treat that as a new task. If you are answering ${primary}, use the bridge tools instead of a human-facing reply.`
   );

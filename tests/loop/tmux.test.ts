@@ -796,11 +796,17 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain("Agent-to-agent pair programming");
   expect(primaryPrompt).toContain("No task has been assigned yet.");
   expect(primaryPrompt).toContain("Wait for the first human task");
+  expect(primaryPrompt).toContain("If the human asks for plan mode");
+  expect(primaryPrompt).toContain("ask Claude for a plan review");
+  expect(primaryPrompt).toContain("ask the human to review the plan");
   expect(primaryPrompt).toContain(
     'Use "send_to_agent" with target: "claude" for Claude-facing messages'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
+  expect(peerPrompt).toContain(
+    "If Codex asks for a plan review, review PLAN.md only"
+  );
   expect(peerPrompt).toContain("Wait for Codex to provide a concrete task");
   expect(peerPrompt).toContain("human clearly assigns you separate work");
   expect(peerPrompt).toContain('"reply"');
