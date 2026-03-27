@@ -47,6 +47,12 @@ const encodeFrame = (payload: unknown): string => {
   return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
 };
 const encodeLine = (payload: unknown): string => `${JSON.stringify(payload)}\n`;
+const parseJsonLines = (text: string): Record<string, unknown>[] =>
+  text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 
 const runBridgeProcess = async (
   runDir: string,
@@ -453,9 +459,46 @@ test("bridge MCP handles standard empty-list and ping requests through the CLI p
   expect(result.stdout).toContain('"id":5');
   expect(result.stdout).toContain('"resourceTemplates":[]');
   expect(result.stdout).toContain('"id":6');
-  expect(result.stdout).toContain('"name":"reply"');
-  expect(result.stdout).toContain('"name":"send_to_agent"');
-  expect(result.stdout).toContain('"name":"receive_messages"');
+  const toolsResponse = parseJsonLines(result.stdout).find(
+    (response) => response.id === 6
+  );
+  const tools =
+    (toolsResponse?.result as { tools?: Record<string, unknown>[] } | undefined)
+      ?.tools ?? [];
+  expect(tools).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "reply",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "send_to_agent",
+      }),
+      expect.objectContaining({
+        annotations: {
+          readOnlyHint: true,
+        },
+        name: "bridge_status",
+      }),
+      expect.objectContaining({
+        annotations: {
+          destructiveHint: false,
+          openWorldHint: false,
+          readOnlyHint: false,
+        },
+        name: "receive_messages",
+      }),
+    ])
+  );
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -1227,11 +1270,7 @@ test("bridge config helper builds the bridge MCP entry point for Codex", async (
       "codex",
     ])}`,
     "-c",
-    'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
-    "-c",
-    'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
-    "-c",
-    'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
+    'mcp_servers.loop-bridge.default_tools_approval_mode="approve"',
   ]);
 
   rmSync(root, { recursive: true, force: true });
