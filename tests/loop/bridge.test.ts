@@ -1226,6 +1226,12 @@ test("bridge config helper builds the bridge MCP entry point for Codex", async (
       runDir,
       "codex",
     ])}`,
+    "-c",
+    'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
+    "-c",
+    'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
+    "-c",
+    'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
   ]);
 
   rmSync(root, { recursive: true, force: true });
