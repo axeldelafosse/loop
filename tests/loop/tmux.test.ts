@@ -679,7 +679,7 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
   expect(manifest.tmuxSession).toBe("repo-loop-1");
 });
 
-test("runInTmux keeps the no-prompt Claude startup wait short", async () => {
+test("runInTmux keeps the no-prompt Claude startup wait bounded", async () => {
   const sleeps: number[] = [];
   let sessionStarted = false;
   const manifest = createRunManifest({
@@ -743,7 +743,7 @@ test("runInTmux keeps the no-prompt Claude startup wait short", async () => {
     { opts: makePairedOptions({ proof: "" }) }
   );
 
-  expect(sleeps).toEqual([250, 250, 250]);
+  expect(sleeps).toEqual([250, 250, 250, 250, 250, 250, 250]);
 });
 
 test("tmux prompts keep the paired review workflow explicit", () => {
@@ -974,6 +974,86 @@ test("runInTmux confirms wrapped Claude dev-channel prompts", async () => {
           return devChannelsPrompt;
         }
         return "";
+      },
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (pane: string, keys: string[]) => {
+        keyCalls.push({ keys, pane });
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => update(manifest),
+    },
+    { opts: makePairedOptions(), task: "Ship feature" }
+  );
+
+  expect(keyCalls).toContainEqual({
+    keys: ["Enter"],
+    pane: "repo-loop-1:0.0",
+  });
+});
+
+test("runInTmux catches a delayed Claude dev-channel prompt", async () => {
+  const keyCalls: Array<{ keys: string[]; pane: string }> = [];
+  let sessionStarted = false;
+  let pollCount = 0;
+  const devChannelsPrompt = [
+    "WARNING: Loading development channels",
+    "",
+    "--dangerously-load-development-channels is for local channel development only.",
+    "",
+    "1. I am using this for local development",
+  ].join("\n");
+  const manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => {
+        pollCount += 1;
+        return pollCount === 5 ? devChannelsPrompt : "";
       },
       cwd: "/repo",
       env: {},

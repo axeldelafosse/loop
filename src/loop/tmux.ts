@@ -46,7 +46,7 @@ const CLAUDE_EXIT_OPTION = "No, exit";
 const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
 const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
 const CLAUDE_CHANNEL_SCOPE = "local";
-const CLAUDE_PROMPT_INITIAL_POLLS = 4;
+const CLAUDE_PROMPT_MAX_POLLS = 8;
 const CLAUDE_PROMPT_POLL_DELAY_MS = 250;
 const CLAUDE_PROMPT_SETTLE_POLLS = 2;
 const MCP_ALREADY_EXISTS_RE = /already exists/i;
@@ -758,17 +758,17 @@ const unblockClaudePane = async (
 ): Promise<void> => {
   const pane = `${session}:0.0`;
   let handledPrompt = false;
+  let lastSnapshot = "";
   let quietPolls = 0;
+  let sawOutput = false;
 
-  for (
-    let attempt = 0;
-    attempt < CLAUDE_PROMPT_INITIAL_POLLS * 2;
-    attempt += 1
-  ) {
-    const prompt = detectClaudePrompt(deps.capturePane(pane));
+  for (let attempt = 0; attempt < CLAUDE_PROMPT_MAX_POLLS; attempt += 1) {
+    const snapshot = normalizePaneText(deps.capturePane(pane));
+    const prompt = detectClaudePrompt(snapshot);
     if (prompt === "confirm") {
       deps.sendKeys(pane, ["Enter"]);
       handledPrompt = true;
+      lastSnapshot = "";
       quietPolls = 0;
       await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
       continue;
@@ -778,16 +778,24 @@ const unblockClaudePane = async (
       await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
       deps.sendKeys(pane, ["Enter"]);
       handledPrompt = true;
+      lastSnapshot = "";
       quietPolls = 0;
       await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
       continue;
     }
 
-    quietPolls += 1;
+    if (snapshot) {
+      sawOutput = true;
+    }
+    quietPolls = snapshot === lastSnapshot ? quietPolls + 1 : 0;
+    lastSnapshot = snapshot;
     if (handledPrompt && quietPolls >= CLAUDE_PROMPT_SETTLE_POLLS) {
       return;
     }
-    if (!handledPrompt && quietPolls >= CLAUDE_PROMPT_INITIAL_POLLS) {
+    if (sawOutput && quietPolls >= CLAUDE_PROMPT_SETTLE_POLLS) {
+      return;
+    }
+    if (attempt + 1 >= CLAUDE_PROMPT_MAX_POLLS) {
       return;
     }
     await deps.sleep(CLAUDE_PROMPT_POLL_DELAY_MS);
