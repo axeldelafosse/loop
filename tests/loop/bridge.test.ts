@@ -28,12 +28,14 @@ const loadBridge = (
   const nonce = Date.now();
   return Promise.all([
     import(`../../src/loop/bridge?test=${nonce}`),
+    import(`../../src/loop/bridge-dispatch?test=${nonce}`),
     import(`../../src/loop/bridge-config?test=${nonce}`),
     import(`../../src/loop/bridge-constants?test=${nonce}`),
     import(`../../src/loop/bridge-runtime?test=${nonce}`),
     import(`../../src/loop/bridge-store?test=${nonce}`),
-  ]).then(([bridge, config, constants, runtime, store]) => ({
+  ]).then(([bridge, dispatch, config, constants, runtime, store]) => ({
     ...bridge,
+    ...dispatch,
     ...config,
     ...constants,
     ...runtime,
@@ -397,6 +399,59 @@ test("bridge MCP send_to_agent rejects an unknown normalized target", async () =
     id: 1,
     jsonrpc: "2.0",
   });
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP reply accepts the manifest bridge chat_id", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-27T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      status: "running",
+      updatedAt: "2026-03-27T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    [
+      encodeFrame({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: {
+            chat_id: "codex_7",
+            text: "ship it",
+          },
+          name: "reply",
+        },
+      }),
+      "\n",
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("queued");
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([
+    expect.objectContaining({
+      message: "ship it",
+      source: "claude",
+      target: "codex",
+    }),
+  ]);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -1365,6 +1420,92 @@ test("bridge config helper writes the Claude MCP config file", async () => {
       },
     },
   });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("dispatchBridgeMessage reports delivered when direct codex delivery succeeds", async () => {
+  const injectCodexMessage = mock(async () => true);
+  const bridge = await loadBridge({ injectCodexMessage });
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await bridge.dispatchBridgeMessage(
+    runDir,
+    "claude",
+    "codex",
+    "Please review the final diff.",
+    (entry) => bridge.deliverCodexBridgeMessage(runDir, entry)
+  );
+
+  expect(result.status).toBe("delivered");
+  expect(bridge.formatDispatchResult(result)).toContain("delivered");
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "Please review the final diff."
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("dispatchBridgeMessage stays queued when tmux metadata is stale", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      tmuxSession: "repo-loop-stale",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await bridge.dispatchBridgeMessage(
+    runDir,
+    "claude",
+    "codex",
+    "Please review the final diff.",
+    undefined,
+    () => bridge.hasLiveCodexTmuxSession(runDir)
+  );
+
+  expect(result.status).toBe("queued");
+  expect(bridge.formatDispatchResult(result)).toContain("queued");
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([
+    expect.objectContaining({
+      message: "Please review the final diff.",
+      source: "claude",
+      target: "codex",
+    }),
+  ]);
 
   rmSync(root, { recursive: true, force: true });
 });

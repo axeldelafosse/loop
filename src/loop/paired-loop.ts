@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import {
   acknowledgeBridgeDelivery,
   readNextPendingBridgeMessage,
-} from "./bridge-runtime";
+} from "./bridge-dispatch";
 import { getLastClaudeSessionId } from "./claude-sdk-server";
 import { getLastCodexThreadId } from "./codex-app-server";
 import {

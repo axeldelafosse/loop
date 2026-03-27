@@ -59,8 +59,10 @@ export const DEFAULT_CODEX_TRANSPORT: TransportMode =
   CODEX_TRANSPORT_APP_SERVER;
 
 const METHOD_INITIALIZE = "initialize";
+const METHOD_INITIALIZED = "initialized";
 const METHOD_THREAD_START = "thread/start";
 const METHOD_TURN_START = "turn/start";
+const METHOD_TURN_STARTED = "turn/started";
 const METHOD_TURN_COMPLETED = "turn/completed";
 const METHOD_ERROR = "error";
 const METHOD_ITEM_COMPLETED = "item/completed";
@@ -77,6 +79,13 @@ const METHODS_TRIGGERING_FALLBACK = new Set([
   METHOD_THREAD_START,
   METHOD_TURN_START,
 ]);
+const BRIDGE_OPT_OUT_NOTIFICATION_METHODS = [
+  METHOD_ERROR,
+  METHOD_ITEM_COMPLETED,
+  METHOD_ITEM_DELTA,
+  METHOD_TURN_COMPLETED,
+  METHOD_TURN_STARTED,
+] as const;
 
 type SpawnFn = (...args: Parameters<typeof spawn>) => ReturnType<typeof spawn>;
 type ConnectWsFn = (url: string) => Promise<import("./ws-client").WsClient>;
@@ -258,6 +267,18 @@ const sendWsResponse = (
   );
 };
 
+const sendWsNotification = (
+  ws: import("./ws-client").WsClient,
+  method: string,
+  params?: Record<string, unknown>
+): void => {
+  sendWsFrame(ws, {
+    ...(params ? { params } : {}),
+    jsonrpc: "2.0",
+    method,
+  });
+};
+
 const handleWsServerRequest = (
   ws: import("./ws-client").WsClient,
   requestId: string,
@@ -296,6 +317,7 @@ const createRemoteAppServerClient = async (
   url: string
 ): Promise<{
   close(): void;
+  sendNotification(method: string, params?: Record<string, unknown>): void;
   sendRequest(method: string, params: unknown): Promise<unknown>;
 }> => {
   const ws = await connectWsFn(url);
@@ -361,6 +383,12 @@ const createRemoteAppServerClient = async (
       closed = true;
       ws.close();
       failAll(new Error("codex app-server remote connection closed"));
+    },
+    sendNotification: (method, params) => {
+      if (closed) {
+        throw new Error("codex app-server remote connection closed");
+      }
+      sendWsNotification(ws, method, params);
     },
     sendRequest: (method: string, params: unknown): Promise<unknown> => {
       if (closed) {
@@ -540,10 +568,11 @@ class AppServerClient {
         clientInfo: {
           name: "loop",
           title: "loop",
-          version: "1.0.3",
+          version: LOOP_VERSION,
         },
         capabilities: { experimentalApi: true },
       });
+      this.sendNotification(METHOD_INITIALIZED);
       this.ready = true;
       await this.ensurePersistentLaunchThread();
     } catch (error) {
@@ -1122,6 +1151,17 @@ class AppServerClient {
     this.sendFrame(payload);
   }
 
+  private sendNotification(
+    method: string,
+    params?: Record<string, unknown>
+  ): void {
+    this.sendFrame({
+      ...(params ? { params } : {}),
+      jsonrpc: "2.0",
+      method,
+    });
+  }
+
   private failAll(error: Error): void {
     for (const state of this.turns.values()) {
       state.reject(error);
@@ -1234,8 +1274,12 @@ export const injectCodexMessage = async (
         title: "loop-bridge",
         version: LOOP_VERSION,
       },
-      capabilities: { experimentalApi: true },
+      capabilities: {
+        experimentalApi: true,
+        optOutNotificationMethods: [...BRIDGE_OPT_OUT_NOTIFICATION_METHODS],
+      },
     });
+    client.sendNotification(METHOD_INITIALIZED);
     await client.sendRequest(METHOD_TURN_START, {
       input: buildInput(prompt),
       threadId,

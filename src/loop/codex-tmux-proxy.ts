@@ -3,9 +3,9 @@ import type { ServerWebSocket } from "bun";
 import { serve, spawnSync } from "bun";
 import {
   acknowledgeBridgeDelivery,
-  clearStaleTmuxBridgeState,
   readNextPendingBridgeMessageForTarget,
-} from "./bridge-runtime";
+} from "./bridge-dispatch";
+import { clearStaleTmuxBridgeState } from "./bridge-runtime";
 import type { BridgeMessage } from "./bridge-store";
 import { findFreePort } from "./ports";
 import { isActiveRunState, readRunManifest } from "./run-state";
