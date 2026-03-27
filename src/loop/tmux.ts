@@ -3,6 +3,12 @@ import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "bun";
 import { BRIDGE_SERVER, BRIDGE_SUBCOMMAND } from "./bridge-constants";
+import {
+  claudeTmuxReplyGuidance,
+  receiveMessagesStuckGuidance,
+  sendProactiveCodexGuidance,
+  sendToClaudeGuidance,
+} from "./bridge-guidance";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
   CODEX_TMUX_PROXY_SUBCOMMAND,
@@ -135,8 +141,6 @@ const capitalize = (value: string): string =>
 const peerAgent = (agent: Agent): Agent =>
   agent === "claude" ? "codex" : "claude";
 
-const bridgeTargetLiteral = (agent: Agent): string => `target: "${agent}"`;
-
 const appendProofPrompt = (parts: string[], proof: string): void => {
   const trimmed = proof.trim();
   if (!trimmed) {
@@ -151,16 +155,13 @@ const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
   if (agent === "claude") {
     return [
       `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
-      'Reply to inbound Codex channel messages with the MCP tool "reply" and the same chat_id.',
-      `Use "send_to_agent" with ${bridgeTargetLiteral("codex")} only for new proactive messages to Codex; do not send Codex-facing responses as a human-facing message.`,
-      'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
+      claudeTmuxReplyGuidance,
+      sendProactiveCodexGuidance(),
+      receiveMessagesStuckGuidance,
     ].join("\n");
   }
 
-  return [
-    `Use "send_to_agent" with ${bridgeTargetLiteral("claude")} for Claude-facing messages, not a human-facing message.`,
-    'Use "bridge_status" or "receive_messages" only if delivery looks stuck.',
-  ].join("\n");
+  return [sendToClaudeGuidance(), receiveMessagesStuckGuidance].join("\n");
 };
 
 const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {

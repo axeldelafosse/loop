@@ -58,6 +58,7 @@ let codexAppServerInternals: AppServerModule["codexAppServerInternals"];
 let processes: TestProcess[] = [];
 let currentHandler: RequestHandler = noopRequestHandler;
 let lastSpawnCommand: string[] = [];
+let wsWrites: string[] = [];
 
 const makeStreamResponse = (
   request: RequestFrame,
@@ -147,6 +148,7 @@ const installConnectWs = (appServerModule: AppServerModule): void => {
           if (!raw.trim()) {
             continue;
           }
+          wsWrites.push(raw);
           const proc = processes.at(-1);
           if (proc) {
             proc.writes.push(raw);
@@ -193,6 +195,9 @@ const latestWrites = (): string[] => {
   return processes.at(-1)?.writes ?? [];
 };
 
+const latestFrames = (): RequestFrame[] =>
+  latestWrites().map((line) => JSON.parse(line) as RequestFrame);
+
 const latestProcess = (): TestProcess | undefined => processes.at(-1);
 
 const resetState = async (): Promise<void> => {
@@ -206,6 +211,7 @@ const resetState = async (): Promise<void> => {
   processes = [];
   currentHandler = noopRequestHandler;
   lastSpawnCommand = [];
+  wsWrites = [];
   appServer.codexAppServerInternals.restoreSpawnFn();
   appServer.codexAppServerInternals.restoreConnectWsFn();
 };
@@ -285,6 +291,22 @@ test("startAppServer exposes the app-server websocket URL", async () => {
   expect(appServer.getCodexAppServerUrl()).toBe("");
 });
 
+test("startAppServer sends initialized after initialize", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+    }
+  };
+
+  await appServer.startAppServer();
+
+  expect(latestFrames().map((frame) => frame.method)).toEqual([
+    "initialize",
+    "initialized",
+  ]);
+});
+
 test("releaseAppServer drops local handles without killing the detached child", async () => {
   const appServer = await getModule();
   currentHandler = (request, write) => {
@@ -341,6 +363,62 @@ test("startAppServer normalizes codex bridge config args before spawning", async
     "-c",
     'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
   ]);
+});
+
+test("injectCodexMessage sends the bridge handshake and notification opt-outs", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+    }
+  };
+
+  await appServer.startAppServer();
+  latestProcess()?.writes.splice(0);
+
+  const delivered = await appServer.injectCodexMessage(
+    appServer.getCodexAppServerUrl(),
+    "thread-1",
+    "Please review the latest diff."
+  );
+
+  expect(delivered).toBe(true);
+  const frames = latestFrames();
+  expect(frames.map((frame) => frame.method)).toEqual([
+    "initialize",
+    "initialized",
+    "turn/start",
+  ]);
+  expect(frames[0]?.params).toMatchObject({
+    capabilities: {
+      experimentalApi: true,
+      optOutNotificationMethods: [
+        "error",
+        "item/completed",
+        "item/agentMessage/delta",
+        "turn/completed",
+        "turn/started",
+      ],
+    },
+    clientInfo: {
+      name: "loop-bridge",
+      title: "loop-bridge",
+    },
+  });
+  expect(frames[2]?.params).toMatchObject({
+    input: [
+      {
+        text: "Please review the latest diff.",
+        text_elements: [],
+        type: "text",
+      },
+    ],
+    threadId: "thread-1",
+  });
 });
 
 test("runCodexTurn promotes thread/start unsupported errors to fallback errors", async () => {
@@ -1021,4 +1099,51 @@ test("persistent codex thread survives an unexpected app-server restart", async 
   expect(threadStarts).toBe(1);
   expect(turnThreadIds).toEqual(["thread-1", "thread-1"]);
   expect(appServer.getLastCodexThreadId()).toBe("thread-1");
+});
+
+test("injectCodexMessage sends initialized and bridge notification opt-outs", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+    }
+  };
+
+  const delivered = await appServer.injectCodexMessage(
+    "ws://127.0.0.1:4500",
+    "thread-1",
+    "Please review the final diff."
+  );
+
+  const frames = wsWrites.map((line) => JSON.parse(line) as RequestFrame);
+  expect(delivered).toBe(true);
+  expect(frames[0]).toMatchObject({
+    method: "initialize",
+    params: {
+      capabilities: {
+        experimentalApi: true,
+        optOutNotificationMethods: [
+          "error",
+          "item/completed",
+          "item/agentMessage/delta",
+          "turn/completed",
+          "turn/started",
+        ],
+      },
+    },
+  });
+  expect(frames[1]).toMatchObject({
+    jsonrpc: "2.0",
+    method: "initialized",
+  });
+  expect(frames[2]).toMatchObject({
+    method: "turn/start",
+    params: {
+      threadId: "thread-1",
+    },
+  });
 });

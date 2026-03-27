@@ -1,17 +1,19 @@
+import { BRIDGE_SERVER as BRIDGE_SERVER_VALUE } from "./bridge-constants";
 import {
-  BRIDGE_SERVER as BRIDGE_SERVER_VALUE,
-  CLAUDE_CHANNEL_USER,
-} from "./bridge-constants";
+  consumeBridgeInbox,
+  dispatchBridgeMessage,
+  formatDispatchResult,
+  isActiveBridgeChatId,
+} from "./bridge-dispatch";
+import { claudeChannelInstructions } from "./bridge-guidance";
 import {
   bridgeRuntimeCommandDeps,
   claudeChannelServerName,
   clearStaleTmuxBridgeState,
-  consumeBridgeInbox,
   deliverCodexBridgeMessage,
-  dispatchBridgeMessage,
   drainCodexTmuxMessages,
   flushClaudeChannelMessages,
-  formatDispatchResult,
+  hasLiveCodexTmuxSession,
 } from "./bridge-runtime";
 import {
   appendBlockedBridgeMessage,
@@ -74,15 +76,6 @@ const normalizeLowerString = (value: unknown): string | undefined => {
   const normalized = value.trim().toLowerCase();
   return normalized || undefined;
 };
-
-const claudeChannelInstructions = (): string =>
-  [
-    `Messages from the Codex agent arrive as <channel source="${BRIDGE_SERVER_VALUE}" chat_id="..." user="${CLAUDE_CHANNEL_USER}" ...>.`,
-    'When you are replying to an inbound channel message, use the "reply" tool and pass back the same chat_id.',
-    "Never answer the human when the inbound message came from Codex. Send the response back through the bridge tools instead.",
-    'Use the "send_to_agent" tool with target: "codex" for proactive messages that are not direct replies to a channel message.',
-    'Use "bridge_status" only when direct delivery appears stuck.',
-  ].join("\n");
 
 // This bridge is launched under the agent CLIs' stdio MCP hooks, but those
 // runtimes expect newline-delimited JSON here so async channel notifications can
@@ -159,22 +152,30 @@ const handleReplyTool = async (
     writeError(id, MCP_INVALID_PARAMS, "reply requires a chat_id");
     return;
   }
+  if (!isActiveBridgeChatId(runDir, chatId)) {
+    writeError(
+      id,
+      MCP_INVALID_PARAMS,
+      "reply chat_id does not match the active bridge conversation"
+    );
+    return;
+  }
   if (!text) {
     writeError(id, MCP_INVALID_PARAMS, "reply requires a non-empty text");
     return;
   }
-  const { delivered, entry } = await dispatchBridgeMessage(
+  const result = await dispatchBridgeMessage(
     runDir,
     source,
     "codex",
-    text
+    text,
+    (entry) => deliverCodexBridgeMessage(runDir, entry),
+    () => hasLiveCodexTmuxSession(runDir)
   );
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
-    result: toolContent(
-      formatDispatchResult(runDir, "codex", delivered, entry)
-    ),
+    result: toolContent(formatDispatchResult(result)),
   });
 };
 
@@ -236,16 +237,20 @@ const handleSendToAgentTool = async (
     return;
   }
 
-  const { delivered, entry } = await dispatchBridgeMessage(
+  const result = await dispatchBridgeMessage(
     runDir,
     source,
     target,
-    message
+    message,
+    target === "codex"
+      ? (entry) => deliverCodexBridgeMessage(runDir, entry)
+      : undefined,
+    target === "codex" ? () => hasLiveCodexTmuxSession(runDir) : undefined
   );
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
-    result: toolContent(formatDispatchResult(runDir, target, delivered, entry)),
+    result: toolContent(formatDispatchResult(result)),
   });
 };
 

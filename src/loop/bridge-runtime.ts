@@ -2,12 +2,14 @@ import { join } from "node:path";
 import { spawnSync } from "bun";
 import { BRIDGE_SERVER, CLAUDE_CHANNEL_USER } from "./bridge-constants";
 import {
-  appendBridgeMessage,
+  acknowledgeBridgeDelivery,
+  bridgeChatId,
+  readNextPendingBridgeMessageForTarget,
+} from "./bridge-dispatch";
+import {
   type BridgeMessage,
-  markBridgeMessage,
   readBridgeInbox,
   readBridgeStatus,
-  readPendingBridgeMessages,
 } from "./bridge-store";
 import { injectCodexMessage } from "./codex-app-server";
 import { sanitizeBase } from "./git";
@@ -17,7 +19,6 @@ import {
   touchRunManifest,
   updateRunManifest,
 } from "./run-state";
-import type { Agent } from "./types";
 
 const CLAUDE_CHANNEL_METHOD = "notifications/claude/channel";
 const CLAUDE_CHANNEL_SOURCE_TYPE = "codex";
@@ -114,6 +115,11 @@ const tmuxSessionExists = (session: string): boolean => {
   return result.exitCode === 0;
 };
 
+export const hasLiveCodexTmuxSession = (runDir: string): boolean => {
+  const { tmuxSession } = readBridgeStatus(runDir);
+  return Boolean(tmuxSession && tmuxSessionExists(tmuxSession));
+};
+
 export const claudeChannelServerName = (runId: string): string =>
   `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
 
@@ -178,41 +184,6 @@ export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
   return true;
 };
 
-export const acknowledgeBridgeDelivery = (
-  runDir: string,
-  message: BridgeMessage,
-  reason?: string
-): void => {
-  markBridgeMessage(runDir, message, "delivered", reason);
-};
-
-export const consumeBridgeInbox = (
-  runDir: string,
-  target: Agent,
-  reason: string
-): BridgeMessage[] => {
-  const messages = readBridgeInbox(runDir, target);
-  for (const message of messages) {
-    acknowledgeBridgeDelivery(runDir, message, reason);
-  }
-  return messages;
-};
-
-export const readNextPendingBridgeMessage = (
-  runDir: string
-): BridgeMessage | undefined => readPendingBridgeMessages(runDir)[0];
-
-export const readNextPendingBridgeMessageForTarget = (
-  runDir: string,
-  target: Agent
-): BridgeMessage | undefined =>
-  readPendingBridgeMessages(runDir).find((entry) => entry.target === target);
-
-const claudeChannelSessionId = (runDir: string): string => {
-  const runId = readBridgeStatus(runDir).runId || "bridge";
-  return `codex_${runId}`;
-};
-
 const writeChannelNotification = (
   runDir: string,
   message: BridgeMessage,
@@ -224,7 +195,7 @@ const writeChannelNotification = (
     params: {
       content: message.message,
       meta: {
-        chat_id: claudeChannelSessionId(runDir),
+        chat_id: bridgeChatId(runDir),
         message_id: message.id,
         source_type: CLAUDE_CHANNEL_SOURCE_TYPE,
         ts: new Date(message.at).toISOString(),
@@ -295,43 +266,6 @@ export const drainCodexTmuxMessages = async (
   }
   acknowledgeBridgeDelivery(runDir, message, "sent to codex tmux pane");
   return true;
-};
-
-export interface BridgeDispatchResult {
-  delivered: boolean;
-  entry: BridgeMessage;
-}
-
-export const dispatchBridgeMessage = async (
-  runDir: string,
-  source: Agent,
-  target: Agent,
-  message: string
-): Promise<BridgeDispatchResult> => {
-  const entry = appendBridgeMessage(runDir, source, target, message);
-  const delivered =
-    target === "codex" ? await deliverCodexBridgeMessage(runDir, entry) : false;
-  return { delivered, entry };
-};
-
-export const formatDispatchResult = (
-  runDir: string,
-  target: Agent,
-  delivered: boolean,
-  entry: BridgeMessage
-): string => {
-  if (delivered) {
-    return `delivered ${entry.id} to ${target}`;
-  }
-  const status = readBridgeStatus(runDir);
-  if (
-    target === "codex" &&
-    status.tmuxSession &&
-    tmuxSessionExists(status.tmuxSession)
-  ) {
-    return `accepted ${entry.id} for codex delivery`;
-  }
-  return `queued ${entry.id} for ${target}`;
 };
 
 export const runBridgeWorker = async (runDir: string): Promise<void> => {
