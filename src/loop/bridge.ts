@@ -39,7 +39,14 @@ const MUTATING_TOOL_ANNOTATIONS = {
   openWorldHint: false,
   readOnlyHint: false,
 };
+const RECEIVE_MESSAGES_TOOL_ANNOTATIONS = {
+  destructiveHint: true,
+  openWorldHint: false,
+  readOnlyHint: false,
+};
 const READ_ONLY_TOOL_ANNOTATIONS = {
+  destructiveHint: false,
+  openWorldHint: false,
   readOnlyHint: true,
 };
 
@@ -381,7 +388,7 @@ const handleBridgeRequest = async (
               name: "bridge_status",
             },
             {
-              annotations: MUTATING_TOOL_ANNOTATIONS,
+              annotations: RECEIVE_MESSAGES_TOOL_ANNOTATIONS,
               description:
                 "Read and clear pending bridge messages addressed to you.",
               inputSchema: {

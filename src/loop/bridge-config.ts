@@ -4,6 +4,11 @@ import { BRIDGE_SERVER, BRIDGE_SUBCOMMAND } from "./bridge-constants";
 import { buildLaunchArgv } from "./launch";
 import type { Agent } from "./types";
 
+const CODEX_AUTO_APPROVED_BRIDGE_TOOLS = [
+  "send_to_agent",
+  "bridge_status",
+  "receive_messages",
+] as const;
 const CODEX_BRIDGE_APPROVAL_MODE = "approve";
 
 const ensureParentDir = (path: string): void => {
@@ -18,15 +23,18 @@ export const buildCodexBridgeConfigArgs = (
 ): string[] => {
   const [command, ...baseArgs] = buildLaunchArgv();
   const args = [...baseArgs, BRIDGE_SUBCOMMAND, runDir, source];
+  const approvalArgs = CODEX_AUTO_APPROVED_BRIDGE_TOOLS.flatMap((tool) => [
+    "-c",
+    `mcp_servers.${BRIDGE_SERVER}.tools.${tool}.approval_mode=${stringifyToml(
+      CODEX_BRIDGE_APPROVAL_MODE
+    )}`,
+  ]);
   return [
     "-c",
     `mcp_servers.${BRIDGE_SERVER}.command=${stringifyToml(command)}`,
     "-c",
     `mcp_servers.${BRIDGE_SERVER}.args=${JSON.stringify(args)}`,
-    "-c",
-    `mcp_servers.${BRIDGE_SERVER}.default_tools_approval_mode=${stringifyToml(
-      CODEX_BRIDGE_APPROVAL_MODE
-    )}`,
+    ...approvalArgs,
   ];
 };
 

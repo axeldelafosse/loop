@@ -422,7 +422,9 @@ test("preparePairedOptions loads stored pair ids before planning", async () => {
       expect.arrayContaining([
         expect.stringContaining("mcp_servers.loop-bridge.command="),
         expect.stringContaining("mcp_servers.loop-bridge.args="),
-        'mcp_servers.loop-bridge.default_tools_approval_mode="approve"',
+        'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
+        'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
+        'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
       ])
     );
     expect(opts.pairedSessionIds).toEqual({
