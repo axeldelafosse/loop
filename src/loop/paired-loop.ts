@@ -80,6 +80,8 @@ export const pairedLoopInternals = {
 const capitalize = (value: string): string =>
   value.slice(0, 1).toUpperCase() + value.slice(1);
 
+const bridgeTargetLiteral = (agent: Agent): string => `target: "${agent}"`;
+
 const resolvePairedReviewers = (
   review: ReviewMode | undefined,
   agent: Agent
@@ -91,9 +93,10 @@ const pairedResumeHint = (runId: string): void => {
 
 const bridgeGuidance = (agent: Agent): string => {
   const peer = agent === "claude" ? "Codex" : "Claude";
+  const target = agent === "claude" ? "codex" : "claude";
   return [
     "Paired mode:",
-    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" when you want ${peer} to act, review, or answer.`,
+    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" with ${bridgeTargetLiteral(target)} when you want ${peer} to act, review, or answer.`,
     'Do not ask the human to relay messages between agents or answer the human on the other agent\'s behalf. Use "bridge_status" if you need the current bridge state.',
     'If "bridge_status" shows pending messages addressed to you, call "receive_messages" to read them.',
   ].join("\n");
@@ -109,7 +112,7 @@ const reviewDeliveryGuidance = (reviewer: Agent, opts: Options): string => {
     return "If review is needed, keep the actionable notes in your review body before the final review signal.";
   }
 
-  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with "send_to_agent" before returning your final review signal.`;
+  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with "send_to_agent" using ${bridgeTargetLiteral(opts.agent)} before returning your final review signal.`;
 };
 
 const reviewToolGuidance = (reviewer: Agent, opts: Options): string =>

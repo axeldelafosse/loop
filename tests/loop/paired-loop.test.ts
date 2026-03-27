@@ -865,7 +865,7 @@ test("runPairedLoop preserves claudex reviewers in paired mode", async () => {
       "concrete file paths, commands, and code locations that must change"
     );
     expect(reviewPrompts[1]?.prompt).toContain(
-      'send the actionable notes to Claude with "send_to_agent"'
+      'send the actionable notes to Claude with "send_to_agent" using target: "claude"'
     );
   });
 });
