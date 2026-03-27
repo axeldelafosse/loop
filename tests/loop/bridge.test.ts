@@ -455,6 +455,59 @@ test("bridge MCP reply accepts the manifest bridge chat_id", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("bridge MCP reply rejects a mismatched bridge chat_id", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-27T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      status: "running",
+      updatedAt: "2026-03-27T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "claude",
+    [
+      encodeFrame({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          arguments: {
+            chat_id: "codex_999",
+            text: "ship it",
+          },
+          name: "reply",
+        },
+      }),
+      "\n",
+    ].join("")
+  );
+
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    error: {
+      code: -32_602,
+      message: "reply chat_id does not match the active bridge conversation",
+    },
+    id: 1,
+    jsonrpc: "2.0",
+  });
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("bridge MCP handles standard empty-list and ping requests through the Claude CLI path", async () => {
   const root = makeTempDir();
   const runDir = join(root, "run");
@@ -1506,6 +1559,29 @@ test("dispatchBridgeMessage stays queued when tmux metadata is stale", async () 
       target: "codex",
     }),
   ]);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("dispatchBridgeMessage formats accepted status with the target name", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+
+  const result = await bridge.dispatchBridgeMessage(
+    runDir,
+    "codex",
+    "claude",
+    "Please review the diff.",
+    undefined,
+    () => true
+  );
+
+  expect(result.status).toBe("accepted");
+  expect(bridge.formatDispatchResult(result)).toBe(
+    `accepted ${result.entry.id} for claude delivery`
+  );
 
   rmSync(root, { recursive: true, force: true });
 });

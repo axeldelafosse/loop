@@ -85,7 +85,7 @@ export const formatDispatchResult = ({
     case "delivered":
       return `delivered ${entry.id} to ${target}`;
     case "accepted":
-      return `accepted ${entry.id} for codex delivery`;
+      return `accepted ${entry.id} for ${target} delivery`;
     default:
       return `queued ${entry.id} for ${target}`;
   }
