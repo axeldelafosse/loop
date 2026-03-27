@@ -54,6 +54,7 @@ const MCP_ALREADY_EXISTS_RE = /already exists/i;
 interface SpawnResult {
   exitCode: number;
   stderr: string;
+  stdout?: string;
 }
 
 interface TerminalSize {
@@ -588,7 +589,7 @@ const keepSessionAttached = (
     "tmux",
     "set-window-option",
     "-t",
-    `${session}:0`,
+    session,
     "remain-on-exit",
     "on",
   ]);
@@ -718,14 +719,16 @@ const runTmuxCommand = (
   deps: TmuxDeps,
   args: string[],
   message = "Failed to start tmux session"
-): void => {
+): SpawnResult => {
   const result = deps.spawn(args);
   if (result.exitCode === 0) {
-    return;
+    return result;
   }
   const suffix = result.stderr ? `: ${result.stderr}` : ".";
   throw new Error(`${message}${suffix}`);
 };
+
+const trimTmuxOutput = (value: string | undefined): string => value?.trim() ?? "";
 
 const normalizePaneText = (text: string): string =>
   text.replace(/\s+/g, " ").trim();
@@ -753,10 +756,9 @@ const detectClaudePrompt = (text: string): "bypass" | "confirm" | undefined => {
 };
 
 const unblockClaudePane = async (
-  session: string,
+  pane: string,
   deps: TmuxDeps
 ): Promise<void> => {
-  const pane = `${session}:0.0`;
   let handledPrompt = false;
   let quietPolls = 0;
 
@@ -864,30 +866,46 @@ const startPairedSession = async (
     deps.cwd,
     claudeCommand,
   ]);
-  runTmuxCommand(
-    deps,
-    [
-      "tmux",
-      "split-window",
-      "-h",
-      "-t",
-      `${session}:0`,
-      "-c",
-      deps.cwd,
-      codexCommand,
-    ],
-    "Failed to split tmux window"
-  );
-  deps.spawn([
+  const claudePane =
+    trimTmuxOutput(
+      runTmuxCommand(deps, [
+        "tmux",
+        "display-message",
+        "-p",
+        "-t",
+        session,
+        "#{pane_id}",
+      ]).stdout
+    ) || `${session}:0.0`;
+  const codexPane =
+    trimTmuxOutput(
+      runTmuxCommand(
+        deps,
+        [
+          "tmux",
+          "split-window",
+          "-h",
+          "-P",
+          "-F",
+          "#{pane_id}",
+          "-t",
+          session,
+          "-c",
+          deps.cwd,
+          codexCommand,
+        ],
+        "Failed to split tmux window"
+      ).stdout
+    ) || `${session}:0.1`;
+  runTmuxCommand(deps, [
     "tmux",
     "select-layout",
     "-t",
-    `${session}:0`,
+    session,
     "even-horizontal",
   ]);
-  await unblockClaudePane(session, deps);
-  const primaryPane =
-    launch.opts.agent === "claude" ? `${session}:0.0` : `${session}:0.1`;
+  await unblockClaudePane(claudePane, deps);
+  const primaryPane = launch.opts.agent === "claude" ? claudePane : codexPane;
   deps.spawn(["tmux", "select-pane", "-t", primaryPane]);
   return session;
 };
@@ -1042,8 +1060,12 @@ const defaultDeps = (): TmuxDeps => ({
   releasePersistentCodexSession,
   startPersistentAgentSession,
   spawn: (args: string[]) => {
-    const result = spawnSync(args, { stderr: "pipe" });
-    return { exitCode: result.exitCode, stderr: decode(result.stderr) };
+    const result = spawnSync(args, { stderr: "pipe", stdout: "pipe" });
+    return {
+      exitCode: result.exitCode,
+      stderr: decode(result.stderr),
+      stdout: decode(result.stdout),
+    };
   },
   updateRunManifest,
 });

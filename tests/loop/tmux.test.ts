@@ -127,7 +127,7 @@ test("runInTmux starts detached session and strips --tmux", async () => {
     "tmux",
     "set-window-option",
     "-t",
-    "repo-loop-1:0",
+    "repo-loop-1",
     "remain-on-exit",
     "on",
   ]);
@@ -159,6 +159,7 @@ test("runInTmux keeps explicit run id in single-agent mode", async () => {
         }
         if (args[0] === "tmux" && args[1] === "new-session") {
           sessionStarted = true;
+          return { exitCode: 0, stderr: "" };
         }
         return { exitCode: 0, stderr: "" };
       },
@@ -182,7 +183,7 @@ test("runInTmux keeps explicit run id in single-agent mode", async () => {
     "tmux",
     "set-window-option",
     "-t",
-    "repo-loop-alpha:0",
+    "repo-loop-alpha",
     "remain-on-exit",
     "on",
   ]);
@@ -270,6 +271,10 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
         }
         if (args[0] === "tmux" && args[1] === "new-session") {
           sessionStarted = true;
+          return { exitCode: 0, stderr: "", stdout: "%10\n" };
+        }
+        if (args[0] === "tmux" && args[1] === "split-window") {
+          return { exitCode: 0, stderr: "", stdout: "%11\n" };
         }
         return { exitCode: 0, stderr: "" };
       },
@@ -351,27 +356,24 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       "/repo",
       claudeCommand,
     ],
+    ["tmux", "display-message", "-p", "-t", "repo-loop-1", "#{pane_id}"],
     [
       "tmux",
       "split-window",
       "-h",
+      "-P",
+      "-F",
+      "#{pane_id}",
       "-t",
-      "repo-loop-1:0",
+      "repo-loop-1",
       "-c",
       "/repo",
       codexCommand,
     ],
-    ["tmux", "select-layout", "-t", "repo-loop-1:0", "even-horizontal"],
-    ["tmux", "select-pane", "-t", "repo-loop-1:0.1"],
+    ["tmux", "select-layout", "-t", "repo-loop-1", "even-horizontal"],
+    ["tmux", "select-pane", "-t", "%11"],
     ["tmux", "has-session", "-t", "repo-loop-1"],
-    [
-      "tmux",
-      "set-window-option",
-      "-t",
-      "repo-loop-1:0",
-      "remain-on-exit",
-      "on",
-    ],
+    ["tmux", "set-window-option", "-t", "repo-loop-1", "remain-on-exit", "on"],
     ["tmux", "has-session", "-t", "repo-loop-1"],
   ]);
   expect(typed).toEqual([]);
@@ -382,6 +384,105 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   expect(manifest.codexRemoteUrl).toBe(codexRemoteUrl);
   expect(manifest.codexThreadId).toBe("codex-thread-1");
   expect(manifest.tmuxSession).toBe("repo-loop-1");
+});
+
+test("runInTmux honors tmux base-index and pane-base-index in paired mode", async () => {
+  const calls: string[][] = [];
+  let sessionStarted = false;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  const delegated = await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => "",
+      cwd: "/repo",
+      env: {},
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (): void => undefined,
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+          return { exitCode: 0, stderr: "", stdout: "%10\n" };
+        }
+        if (
+          args[0] === "tmux" &&
+          args[1] === "split-window"
+        ) {
+          return { exitCode: 0, stderr: "", stdout: "%11\n" };
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    { opts, task: "Ship feature" }
+  );
+
+  expect(delegated).toBe(true);
+  expect(calls).toContainEqual([
+    "tmux",
+    "split-window",
+    "-h",
+    "-P",
+    "-F",
+    "#{pane_id}",
+    "-t",
+    "repo-loop-1",
+    "-c",
+    "/repo",
+    expect.any(String),
+  ]);
+  expect(calls).toContainEqual(["tmux", "select-layout", "-t", "repo-loop-1", "even-horizontal"]);
+  expect(calls).toContainEqual(["tmux", "select-pane", "-t", "%11"]);
+  expect(calls).toContainEqual([
+    "tmux",
+    "set-window-option",
+    "-t",
+    "repo-loop-1",
+    "remain-on-exit",
+    "on",
+  ]);
 });
 
 test("runInTmux releases local codex app-server handles after paired handoff", async () => {
@@ -665,12 +766,15 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
       tmuxInternals.buildInteractivePrimaryPrompt(opts, "1")
     ),
   ]);
-  expect(calls[3]).toEqual([
+  expect(calls[4]).toEqual([
     "tmux",
     "split-window",
     "-h",
+    "-P",
+    "-F",
+    "#{pane_id}",
     "-t",
-    "repo-loop-1:0",
+    "repo-loop-1",
     "-c",
     "/repo",
     codexCommand,
@@ -1372,12 +1476,15 @@ test("runInTmux reopens paired tmux panes without replaying the task", async () 
     "/repo",
     claudeCommand,
   ]);
-  expect(calls[3]).toEqual([
+  expect(calls[4]).toEqual([
     "tmux",
     "split-window",
     "-h",
+    "-P",
+    "-F",
+    "#{pane_id}",
     "-t",
-    "repo-loop-alpha:0",
+    "repo-loop-alpha",
     "-c",
     "/repo",
     codexCommand,
@@ -1450,7 +1557,7 @@ test("runInTmux resolves paired run id through an existing manifest", async () =
         "tmux",
         "set-window-option",
         "-t",
-        `${session}:0`,
+        session,
         "remain-on-exit",
         "on",
       ],
@@ -1542,7 +1649,7 @@ test("runInTmux honors paired run resume from --session", async () => {
         "tmux",
         "set-window-option",
         "-t",
-        `${session}:0`,
+        session,
         "remain-on-exit",
         "on",
       ],
@@ -1613,7 +1720,7 @@ test("runInTmux resolves paired resume from a worktree using git common dir", as
       command,
     ],
     ["tmux", "has-session", "-t", session],
-    ["tmux", "set-window-option", "-t", `${session}:0`, "remain-on-exit", "on"],
+    ["tmux", "set-window-option", "-t", session, "remain-on-exit", "on"],
   ]);
 });
 
@@ -1680,7 +1787,7 @@ test("runInTmux strips a worktree suffix when git metadata is unavailable", asyn
       command,
     ],
     ["tmux", "has-session", "-t", session],
-    ["tmux", "set-window-option", "-t", `${session}:0`, "remain-on-exit", "on"],
+    ["tmux", "set-window-option", "-t", session, "remain-on-exit", "on"],
   ]);
 });
 
@@ -1746,7 +1853,7 @@ test("runInTmux resolves raw stored session ids from --session", async () => {
           "tmux",
           "set-window-option",
           "-t",
-          `${session}:0`,
+          session,
           "remain-on-exit",
           "on",
         ],
@@ -1815,7 +1922,7 @@ test("runInTmux ignores an unresolved raw session id in paired mode", async () =
         "tmux",
         "set-window-option",
         "-t",
-        `${runBase}-loop-1:0`,
+        `${runBase}-loop-1`,
         "remain-on-exit",
         "on",
       ],
@@ -1892,7 +1999,7 @@ test("runInTmux keeps raw --session values in single-agent mode", async () => {
         "tmux",
         "set-window-option",
         "-t",
-        "repo-loop-1:0",
+        "repo-loop-1",
         "remain-on-exit",
         "on",
       ],
@@ -1929,7 +2036,7 @@ test("runInTmux increments session index on conflicts", async () => {
     "tmux",
     "set-window-option",
     "-t",
-    "repo-loop-2:0",
+    "repo-loop-2",
     "remain-on-exit",
     "on",
   ]);
