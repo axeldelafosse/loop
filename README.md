@@ -18,7 +18,13 @@ or
 loop --prompt "Implement {feature}" --proof "Use {skill} to verify your changes" --tmux
 ```
 
-## Agent-to-agent pair programming
+By default `loop` uses Codex as the main worker and Claude as a reviewer. To run Claude as the main worker instead:
+
+```bash
+loop --agent claude --tmux
+```
+
+## [Agent-to-agent pair programming](https://axeldelafosse.com/blog/agent-to-agent-pair-programming)
 
 One agent is the main worker, the other acts as a reviewer. They work together on a PLAN.md and iterate until they both agree the task is done. Then the main worker creates a draft PR.
 
@@ -184,6 +190,20 @@ When running from source (`bun src/loop.ts`), auto-update is disabled — use `g
 - `--tmux`: run `loop` in a detached tmux session so it survives SSH disconnects. In paired mode, Claude and Codex open side-by-side in the same tmux workspace. With no prompt and no proof, paired mode starts an interactive workspace and waits for the first task. Session name format: `repo-loop-X`
 - `--worktree`: create and run inside a fresh git worktree + branch automatically. Resumed run ids re-enter or recreate the matching worktree when possible. Worktree/branch format: `repo-loop-X`
 - `-h, --help`: help
+
+## FAQ
+
+### How do I use Claude as the main worker?
+
+Use `--agent claude`.
+
+### What happens when the two models disagree? And what's the point of pair programming if they both agree?
+
+You might be surprised by how often a good model pushes back on comments. And if they both agree, that is in fact a strong signal. A model can make a mistake and catch it itself during the review -- if the other model also caught it, it is very likely a real issue. But they might both be wrong, so it is still useful to act as the human in the loop and steer when needed.
+
+### Any benefits from doing the review locally compared to reviewing the GitHub PR?
+
+It makes this feedback loop faster and more natural, while preserving context across iterations.
 
 ## Examples
 
