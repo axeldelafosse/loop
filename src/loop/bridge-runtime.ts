@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { spawnSync } from "bun";
-import { BRIDGE_SERVER, CLAUDE_CHANNEL_USER } from "./bridge-constants";
+import { removeClaudeChannelServer } from "./bridge-claude-registration";
+import { CLAUDE_CHANNEL_USER } from "./bridge-constants";
 import {
   acknowledgeBridgeDelivery,
   bridgeChatId,
@@ -8,11 +9,11 @@ import {
 } from "./bridge-dispatch";
 import {
   type BridgeMessage,
+  type BridgeStatus,
   readBridgeInbox,
   readBridgeStatus,
 } from "./bridge-store";
 import { injectCodexMessage } from "./codex-app-server";
-import { sanitizeBase } from "./git";
 import {
   isActiveRunState,
   parseRunLifecycleState,
@@ -115,51 +116,33 @@ const tmuxSessionExists = (session: string): boolean => {
   return result.exitCode === 0;
 };
 
-export const hasLiveCodexTmuxSession = (runDir: string): boolean => {
-  const { tmuxSession } = readBridgeStatus(runDir);
-  return Boolean(tmuxSession && tmuxSessionExists(tmuxSession));
-};
+export interface BridgeRuntimeStatus extends BridgeStatus {
+  codexDeliveryMode: "app-server" | "none" | "tmux";
+  hasLiveTmuxSession: boolean;
+}
 
-export const claudeChannelServerName = (runId: string): string =>
-  `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
-
-const logClaudeChannelServerRemovalFailure = (
-  serverName: string,
-  detail: string
-): void => {
-  console.error(
-    `[loop] failed to remove Claude channel server "${serverName}": ${detail}`
+export const readBridgeRuntimeStatus = (
+  runDir: string
+): BridgeRuntimeStatus => {
+  const status = readBridgeStatus(runDir);
+  const hasLiveTmuxSession = Boolean(
+    status.tmuxSession && tmuxSessionExists(status.tmuxSession)
   );
+  let codexDeliveryMode: BridgeRuntimeStatus["codexDeliveryMode"] = "none";
+  if (hasLiveTmuxSession) {
+    codexDeliveryMode = "tmux";
+  } else if (status.hasCodexRemote) {
+    codexDeliveryMode = "app-server";
+  }
+  return {
+    ...status,
+    codexDeliveryMode,
+    hasLiveTmuxSession,
+  };
 };
 
-const removeClaudeChannelServer = (runId: string): void => {
-  if (!runId) {
-    return;
-  }
-  const serverName = claudeChannelServerName(runId);
-  try {
-    const result = bridgeRuntimeCommandDeps.spawnSync(
-      ["claude", "mcp", "remove", "--scope", "local", serverName],
-      {
-        stderr: "pipe",
-        stdout: "ignore",
-      }
-    );
-    if (result.exitCode === 0) {
-      return;
-    }
-    const stderr = result.stderr ? decodeOutput(result.stderr).trim() : "";
-    logClaudeChannelServerRemovalFailure(
-      serverName,
-      stderr || `exit code ${result.exitCode ?? "unknown"}`
-    );
-  } catch (error: unknown) {
-    // Cleanup should not fail the bridge flow.
-    logClaudeChannelServerRemovalFailure(
-      serverName,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
+export const hasLiveCodexTmuxSession = (runDir: string): boolean => {
+  return readBridgeRuntimeStatus(runDir).hasLiveTmuxSession;
 };
 
 export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
@@ -180,7 +163,15 @@ export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
   if (!(next && removedRunId)) {
     return false;
   }
-  removeClaudeChannelServer(removedRunId);
+  removeClaudeChannelServer(
+    removedRunId,
+    (args) =>
+      bridgeRuntimeCommandDeps.spawnSync(args, {
+        stderr: "pipe",
+        stdout: "ignore",
+      }),
+    console.error
+  );
   return true;
 };
 
@@ -220,14 +211,14 @@ export const deliverCodexBridgeMessage = async (
   runDir: string,
   message: BridgeMessage
 ): Promise<boolean> => {
-  const status = readBridgeStatus(runDir);
+  const status = readBridgeRuntimeStatus(runDir);
+  if (status.hasLiveTmuxSession) {
+    return false;
+  }
   if (status.tmuxSession) {
-    if (tmuxSessionExists(status.tmuxSession)) {
-      return false;
-    }
     clearStaleTmuxBridgeState(runDir);
   }
-  if (!(status.codexRemoteUrl && status.codexThreadId)) {
+  if (!status.hasCodexRemote) {
     return false;
   }
   try {
@@ -248,11 +239,11 @@ export const deliverCodexBridgeMessage = async (
 export const drainCodexTmuxMessages = async (
   runDir: string
 ): Promise<boolean> => {
-  const { tmuxSession } = readBridgeStatus(runDir);
-  if (!tmuxSession) {
+  const status = readBridgeRuntimeStatus(runDir);
+  if (!status.tmuxSession) {
     return false;
   }
-  if (!tmuxSessionExists(tmuxSession)) {
+  if (!status.hasLiveTmuxSession) {
     clearStaleTmuxBridgeState(runDir);
     return false;
   }
@@ -260,7 +251,10 @@ export const drainCodexTmuxMessages = async (
   if (!message) {
     return false;
   }
-  const delivered = await injectCodexTmuxMessage(tmuxSession, message.message);
+  const delivered = await injectCodexTmuxMessage(
+    status.tmuxSession,
+    message.message
+  );
   if (!delivered) {
     return false;
   }
@@ -270,7 +264,7 @@ export const drainCodexTmuxMessages = async (
 
 export const runBridgeWorker = async (runDir: string): Promise<void> => {
   while (true) {
-    const status = readBridgeStatus(runDir);
+    const status = readBridgeRuntimeStatus(runDir);
     const state = parseRunLifecycleState(status.state);
     if (!(state && isActiveRunState(state))) {
       return;
@@ -278,7 +272,7 @@ export const runBridgeWorker = async (runDir: string): Promise<void> => {
     if (!status.tmuxSession) {
       return;
     }
-    if (!tmuxSessionExists(status.tmuxSession)) {
+    if (!status.hasLiveTmuxSession) {
       clearStaleTmuxBridgeState(runDir);
       return;
     }

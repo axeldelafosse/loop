@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "bun";
-import { BRIDGE_SERVER, BRIDGE_SUBCOMMAND } from "./bridge-constants";
+import { registerClaudeChannelServer as registerClaudeBridgeServer } from "./bridge-claude-registration";
+import {
+  buildClaudeChannelServerConfig,
+  claudeChannelServerName,
+} from "./bridge-config";
 import {
   claudeTmuxReplyGuidance,
   receiveMessagesStuckGuidance,
@@ -51,11 +55,9 @@ const CLAUDE_BYPASS_ACCEPT = "Yes, I accept";
 const CLAUDE_EXIT_OPTION = "No, exit";
 const CLAUDE_DEV_CHANNELS_PROMPT = "WARNING: Loading development channels";
 const CLAUDE_DEV_CHANNELS_CONFIRM = "I am using this for local development";
-const CLAUDE_CHANNEL_SCOPE = "local";
 const CLAUDE_PROMPT_MAX_POLLS = 8;
 const CLAUDE_PROMPT_POLL_DELAY_MS = 250;
 const CLAUDE_PROMPT_SETTLE_POLLS = 2;
-const MCP_ALREADY_EXISTS_RE = /already exists/i;
 
 interface SpawnResult {
   exitCode: number;
@@ -150,7 +152,7 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
 };
 
 const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
-  const serverName = buildClaudeChannelServerName(runId);
+  const serverName = claudeChannelServerName(runId);
 
   if (agent === "claude") {
     return [
@@ -300,21 +302,6 @@ const resolveTmuxModel = (agent: Agent, opts: Options): string => {
   return opts.agent === "claude"
     ? DEFAULT_CLAUDE_MODEL
     : (opts.claudeReviewerModel ?? DEFAULT_CLAUDE_MODEL);
-};
-
-const buildClaudeChannelServerName = (runId: string): string =>
-  `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
-
-const buildClaudeChannelServerConfig = (
-  launchArgv: string[],
-  runDir: string
-): string => {
-  const [command, ...baseArgs] = launchArgv;
-  return JSON.stringify({
-    args: [...baseArgs, BRIDGE_SUBCOMMAND, runDir, "claude"],
-    command,
-    type: "stdio",
-  });
 };
 
 const buildClaudeCommand = (
@@ -647,25 +634,14 @@ const updatePairedManifest = (
   );
 };
 
-const registerClaudeChannelServer = (
+const registerClaudeChannelServerForRun = (
   deps: TmuxDeps,
-  serverName: string,
+  runId: string,
   runDir: string
 ): void => {
-  const result = deps.spawn([
-    "claude",
-    "mcp",
-    "add-json",
-    "--scope",
-    CLAUDE_CHANNEL_SCOPE,
-    serverName,
-    buildClaudeChannelServerConfig(deps.launchArgv, runDir),
-  ]);
-  if (result.exitCode === 0 || MCP_ALREADY_EXISTS_RE.test(result.stderr)) {
-    return;
-  }
-  const suffix = result.stderr ? `: ${result.stderr}` : ".";
-  throw new Error(`[loop] failed to register Claude channel server${suffix}`);
+  registerClaudeBridgeServer(deps.launchArgv, runId, runDir, (args) =>
+    deps.spawn(args)
+  );
 };
 
 const ensurePairedSessionIds = async (
@@ -835,8 +811,8 @@ const startPairedSession = async (
     codexRemoteUrl,
     codexThreadId
   );
-  const claudeChannelServer = buildClaudeChannelServerName(storage.runId);
-  registerClaudeChannelServer(deps, claudeChannelServer, storage.runDir);
+  const claudeChannelServer = claudeChannelServerName(storage.runId);
+  registerClaudeChannelServerForRun(deps, storage.runId, storage.runDir);
   const env = [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${storage.runId}`];
   const claudePrompt = buildLaunchPrompt(launch, "claude", storage.runId);
   const codexPrompt = buildLaunchPrompt(launch, "codex", storage.runId);
@@ -1151,7 +1127,7 @@ export const runInTmux = async (
 export const tmuxInternals = {
   buildClaudeCommand,
   buildClaudeChannelServerConfig,
-  buildClaudeChannelServerName,
+  buildClaudeChannelServerName: claudeChannelServerName,
   buildCodexCommand,
   buildInteractivePeerPrompt,
   buildInteractivePrimaryPrompt,

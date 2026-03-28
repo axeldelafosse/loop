@@ -64,6 +64,13 @@ const listedTools = (stdout: string): Record<string, unknown>[] => {
       ?.tools ?? []
   );
 };
+const toolText = (stdout: string, id: number): string => {
+  const response = parseJsonLines(stdout).find((entry) => entry.id === id);
+  const content = (
+    response?.result as { content?: Array<{ text?: string }> } | undefined
+  )?.content;
+  return content?.[0]?.text ?? "";
+};
 
 const runBridgeProcess = async (
   runDir: string,
@@ -182,6 +189,126 @@ test("markBridgeMessage records acknowledgements and clears pending entries", as
       target: "codex",
     }),
   ]);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("readBridgeStatus derives bridge naming and transport fields", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      claudeSessionId: "claude-session-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-27T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      state: "submitted",
+      status: "running",
+      updatedAt: "2026-03-27T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.readBridgeStatus(runDir)).toMatchObject({
+    bridgeServer: bridge.BRIDGE_SERVER,
+    claudeBridgeMode: "mcp-config",
+    claudeChannelServer: bridge.claudeChannelServerName("7"),
+    claudeSessionId: "claude-session-1",
+    codexRemoteUrl: "ws://127.0.0.1:4500",
+    codexThreadId: "codex-thread-1",
+    hasCodexRemote: true,
+    hasTmuxSession: false,
+    pending: { claude: 0, codex: 0 },
+    runId: "7",
+    state: "submitted",
+    status: "running",
+    tmuxSession: "",
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("readBridgeRuntimeStatus distinguishes live and stale tmux delivery", async () => {
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      const session = args[3];
+      return {
+        exitCode: session === "repo-loop-live" ? 0 : 1,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.alloc(0),
+      };
+    }
+    return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge();
+  bridge.bridgeRuntimeCommandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  const liveRunDir = join(root, "live");
+  const staleRunDir = join(root, "stale");
+  mkdirSync(liveRunDir, { recursive: true });
+  mkdirSync(staleRunDir, { recursive: true });
+
+  writeFileSync(
+    join(liveRunDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-live",
+      createdAt: "2026-03-27T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      state: "running",
+      status: "running",
+      tmuxSession: "repo-loop-live",
+      updatedAt: "2026-03-27T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  writeFileSync(
+    join(staleRunDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-stale",
+      createdAt: "2026-03-27T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "9",
+      state: "running",
+      status: "running",
+      tmuxSession: "repo-loop-stale",
+      updatedAt: "2026-03-27T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.readBridgeRuntimeStatus(liveRunDir)).toMatchObject({
+    claudeBridgeMode: "local-registration",
+    claudeChannelServer: bridge.claudeChannelServerName("8"),
+    codexDeliveryMode: "tmux",
+    hasCodexRemote: true,
+    hasLiveTmuxSession: true,
+    hasTmuxSession: true,
+  });
+  expect(bridge.readBridgeRuntimeStatus(staleRunDir)).toMatchObject({
+    claudeBridgeMode: "local-registration",
+    claudeChannelServer: bridge.claudeChannelServerName("9"),
+    codexDeliveryMode: "app-server",
+    hasCodexRemote: true,
+    hasLiveTmuxSession: false,
+    hasTmuxSession: true,
+  });
 
   rmSync(root, { recursive: true, force: true });
 });
@@ -709,6 +836,130 @@ test("bridge MCP writes line-delimited JSON responses", async () => {
       protocolVersion: "2024-11-05",
     }),
   });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge runtime status reports app-server-backed config-file delivery", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      claudeSessionId: "claude-session-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      state: "submitted",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.readBridgeRuntimeStatus(runDir)).toMatchObject({
+    claudeBridgeMode: "mcp-config",
+    claudeChannelServer: bridge.claudeChannelServerName("7"),
+    codexDeliveryMode: "app-server",
+    hasCodexRemote: true,
+    hasLiveTmuxSession: false,
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge runtime status reports live tmux delivery with a run-scoped Claude server", async () => {
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+    }
+    return { exitCode: 1, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge();
+  bridge.bridgeRuntimeCommandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      state: "submitted",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.readBridgeRuntimeStatus(runDir)).toMatchObject({
+    claudeBridgeMode: "local-registration",
+    claudeChannelServer: "loop-bridge-8",
+    codexDeliveryMode: "tmux",
+    hasCodexRemote: false,
+    hasLiveTmuxSession: true,
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP bridge_status includes runtime delivery fields", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      claudeSessionId: "claude-session-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      state: "submitted",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    encodeLine({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {},
+        name: "bridge_status",
+      },
+    })
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  const status = toolText(result.stdout, 1);
+  expect(status).toContain('"claudeBridgeMode": "mcp-config"');
+  expect(status).toContain('"claudeChannelServer": "loop-bridge-7"');
+  expect(status).toContain('"codexDeliveryMode": "app-server"');
+  expect(status).toContain('"hasCodexRemote": true');
+  expect(status).toContain('"hasLiveTmuxSession": false');
 
   rmSync(root, { recursive: true, force: true });
 });

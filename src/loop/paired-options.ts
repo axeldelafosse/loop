@@ -1,5 +1,6 @@
 import {
   buildCodexBridgeConfigArgs,
+  claudeChannelServerName,
   ensureClaudeBridgeConfig,
 } from "./bridge-config";
 import {
@@ -139,7 +140,11 @@ export const applyPairedOptions = (
   manifest: RunManifest | undefined,
   allowRawSessionFallback = false
 ): void => {
-  opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(storage.runDir, "claude");
+  opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(
+    storage.runDir,
+    "claude",
+    claudeChannelServerName(storage.runId)
+  );
   opts.claudePersistentSession = true;
   opts.codexMcpConfigArgs = buildCodexBridgeConfigArgs(storage.runDir, "codex");
   opts.pairedMode = true;

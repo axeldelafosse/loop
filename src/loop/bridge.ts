@@ -1,3 +1,4 @@
+import { claudeChannelServerName } from "./bridge-config";
 import { BRIDGE_SERVER as BRIDGE_SERVER_VALUE } from "./bridge-constants";
 import {
   consumeBridgeInbox,
@@ -8,12 +9,12 @@ import {
 import { claudeChannelInstructions } from "./bridge-guidance";
 import {
   bridgeRuntimeCommandDeps,
-  claudeChannelServerName,
   clearStaleTmuxBridgeState,
   deliverCodexBridgeMessage,
   drainCodexTmuxMessages,
   flushClaudeChannelMessages,
   hasLiveCodexTmuxSession,
+  readBridgeRuntimeStatus,
 } from "./bridge-runtime";
 import {
   appendBlockedBridgeMessage,
@@ -23,7 +24,6 @@ import {
   formatBridgeInbox,
   normalizeAgent,
   readBridgeEvents,
-  readBridgeStatus,
 } from "./bridge-store";
 import { LOOP_VERSION } from "./constants";
 import type { Agent } from "./types";
@@ -117,7 +117,9 @@ const handleBridgeStatusTool = (
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
-    result: toolContent(JSON.stringify(readBridgeStatus(runDir), null, 2)),
+    result: toolContent(
+      JSON.stringify(readBridgeRuntimeStatus(runDir), null, 2)
+    ),
   });
 };
 

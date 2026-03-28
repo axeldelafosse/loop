@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { claudeChannelServerName } from "./bridge-config";
+import { BRIDGE_SERVER } from "./bridge-constants";
 import {
   appendRunTranscriptEntry,
   buildTranscriptPath,
@@ -36,9 +38,14 @@ interface BridgeAck extends BridgeBaseEvent {
 export type BridgeEvent = BridgeAck | BridgeMessage;
 
 export interface BridgeStatus {
+  bridgeServer: string;
+  claudeBridgeMode: "local-registration" | "mcp-config";
+  claudeChannelServer: string;
   claudeSessionId: string;
   codexRemoteUrl: string;
   codexThreadId: string;
+  hasCodexRemote: boolean;
+  hasTmuxSession: boolean;
   pending: { claude: number; codex: number };
   runId: string;
   state: string;
@@ -231,15 +238,25 @@ const countPendingMessages = (runDir: string): BridgeStatus["pending"] => {
 
 export const readBridgeStatus = (runDir: string): BridgeStatus => {
   const manifest = readRunManifest(join(runDir, "manifest.json"));
+  const runId = manifest?.runId ?? "";
+  const codexRemoteUrl = manifest?.codexRemoteUrl ?? "";
+  const codexThreadId = manifest?.codexThreadId ?? "";
+  const tmuxSession = manifest?.tmuxSession ?? "";
+  const hasTmuxSession = Boolean(tmuxSession);
   return {
+    bridgeServer: BRIDGE_SERVER,
+    claudeBridgeMode: hasTmuxSession ? "local-registration" : "mcp-config",
+    claudeChannelServer: runId ? claudeChannelServerName(runId) : BRIDGE_SERVER,
     claudeSessionId: manifest?.claudeSessionId ?? "",
-    codexRemoteUrl: manifest?.codexRemoteUrl ?? "",
-    codexThreadId: manifest?.codexThreadId ?? "",
+    codexRemoteUrl,
+    codexThreadId,
+    hasCodexRemote: Boolean(codexRemoteUrl && codexThreadId),
+    hasTmuxSession,
     pending: countPendingMessages(runDir),
-    runId: manifest?.runId ?? "",
+    runId,
     state: manifest?.state ?? "unknown",
     status: manifest?.status ?? "unknown",
-    tmuxSession: manifest?.tmuxSession ?? "",
+    tmuxSession,
   };
 };
 
