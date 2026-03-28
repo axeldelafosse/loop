@@ -155,7 +155,7 @@ const forwardBridgePrompt = (source: Agent, message: string): string =>
     `Message from ${capitalize(source)} via the loop bridge:`,
     message.trim(),
     "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-    'Reply to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+    'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
     "Do not acknowledge receipt without new information.",
   ].join("\n\n");
 

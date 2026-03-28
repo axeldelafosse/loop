@@ -8,7 +8,6 @@ import {
   claudeChannelServerName,
 } from "./bridge-config";
 import {
-  claudeTmuxReplyGuidance,
   receiveMessagesStuckGuidance,
   sendProactiveCodexGuidance,
   sendToClaudeGuidance,
@@ -157,7 +156,6 @@ const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
   if (agent === "claude") {
     return [
       `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
-      claudeTmuxReplyGuidance,
       sendProactiveCodexGuidance(),
       receiveMessagesStuckGuidance,
     ].join("\n");

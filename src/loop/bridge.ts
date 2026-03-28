@@ -4,7 +4,6 @@ import {
   consumeBridgeInbox,
   dispatchBridgeMessage,
   formatDispatchResult,
-  isActiveBridgeChatId,
 } from "./bridge-dispatch";
 import { claudeChannelInstructions } from "./bridge-guidance";
 import {
@@ -142,45 +141,6 @@ const handleReceiveMessagesTool = (
   });
 };
 
-const handleReplyTool = async (
-  id: JsonRpcRequest["id"],
-  runDir: string,
-  source: Agent,
-  args: Record<string, unknown>
-): Promise<void> => {
-  const chatId = asString(args.chat_id);
-  const text = asString(args.text);
-  if (!chatId) {
-    writeError(id, MCP_INVALID_PARAMS, "reply requires a chat_id");
-    return;
-  }
-  if (!isActiveBridgeChatId(runDir, chatId)) {
-    writeError(
-      id,
-      MCP_INVALID_PARAMS,
-      "reply chat_id does not match the active bridge conversation"
-    );
-    return;
-  }
-  if (!text) {
-    writeError(id, MCP_INVALID_PARAMS, "reply requires a non-empty text");
-    return;
-  }
-  const result = await dispatchBridgeMessage(
-    runDir,
-    source,
-    "codex",
-    text,
-    (entry) => deliverCodexBridgeMessage(runDir, entry),
-    () => hasLiveCodexTmuxSession(runDir)
-  );
-  writeJsonRpc({
-    id,
-    jsonrpc: "2.0",
-    result: toolContent(formatDispatchResult(result)),
-  });
-};
-
 const handleSendToAgentTool = async (
   id: JsonRpcRequest["id"],
   runDir: string,
@@ -276,11 +236,6 @@ const handleToolCall = async (
     return;
   }
 
-  if (source === "claude" && name === "reply") {
-    await handleReplyTool(id, runDir, source, args);
-    return;
-  }
-
   if (name !== "send_to_agent") {
     writeError(id, MCP_INVALID_PARAMS, `Unknown tool: ${name}`);
     return;
@@ -347,25 +302,6 @@ const handleBridgeRequest = async (
         jsonrpc: "2.0",
         result: {
           tools: [
-            ...(source === "claude"
-              ? [
-                  {
-                    annotations: MUTATING_TOOL_ANNOTATIONS,
-                    description:
-                      "Reply to the active Codex channel conversation and deliver the response back to Codex.",
-                    inputSchema: {
-                      additionalProperties: false,
-                      properties: {
-                        chat_id: { type: "string" },
-                        text: { type: "string" },
-                      },
-                      required: ["chat_id", "text"],
-                      type: "object",
-                    },
-                    name: "reply",
-                  },
-                ]
-              : []),
             {
               annotations: MUTATING_TOOL_ANNOTATIONS,
               description: "Send an explicit message to the paired agent.",

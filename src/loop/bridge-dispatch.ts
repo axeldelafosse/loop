@@ -24,9 +24,6 @@ export const bridgeChatId = (runDir: string): string => {
   return `codex_${runId}`;
 };
 
-export const isActiveBridgeChatId = (runDir: string, chatId: string): boolean =>
-  chatId === bridgeChatId(runDir);
-
 export const acknowledgeBridgeDelivery = (
   runDir: string,
   message: BridgeMessage,

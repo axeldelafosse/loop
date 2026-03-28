@@ -529,25 +529,10 @@ test("bridge MCP send_to_agent rejects an unknown normalized target", async () =
   rmSync(root, { recursive: true, force: true });
 });
 
-test("bridge MCP reply accepts the manifest bridge chat_id", async () => {
-  const bridge = await loadBridge();
+test("bridge MCP send_to_agent rejects targeting the current agent", async () => {
   const root = makeTempDir();
   const runDir = join(root, "run");
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(
-    join(runDir, "manifest.json"),
-    `${JSON.stringify({
-      createdAt: "2026-03-27T10:00:00.000Z",
-      cwd: "/repo",
-      mode: "paired",
-      pid: 1234,
-      repoId: "repo-123",
-      runId: "7",
-      status: "running",
-      updatedAt: "2026-03-27T10:00:00.000Z",
-    })}\n`,
-    "utf8"
-  );
 
   const result = await runBridgeProcess(
     runDir,
@@ -559,63 +544,10 @@ test("bridge MCP reply accepts the manifest bridge chat_id", async () => {
         method: "tools/call",
         params: {
           arguments: {
-            chat_id: "codex_7",
-            text: "ship it",
+            message: "ship it",
+            target: "claude",
           },
-          name: "reply",
-        },
-      }),
-      "\n",
-    ].join("")
-  );
-
-  expect(result.code).toBe(0);
-  expect(result.stderr).toBe("");
-  expect(result.stdout).toContain("queued");
-  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([
-    expect.objectContaining({
-      message: "ship it",
-      source: "claude",
-      target: "codex",
-    }),
-  ]);
-  rmSync(root, { recursive: true, force: true });
-});
-
-test("bridge MCP reply rejects a mismatched bridge chat_id", async () => {
-  const bridge = await loadBridge();
-  const root = makeTempDir();
-  const runDir = join(root, "run");
-  mkdirSync(runDir, { recursive: true });
-  writeFileSync(
-    join(runDir, "manifest.json"),
-    `${JSON.stringify({
-      createdAt: "2026-03-27T10:00:00.000Z",
-      cwd: "/repo",
-      mode: "paired",
-      pid: 1234,
-      repoId: "repo-123",
-      runId: "7",
-      status: "running",
-      updatedAt: "2026-03-27T10:00:00.000Z",
-    })}\n`,
-    "utf8"
-  );
-
-  const result = await runBridgeProcess(
-    runDir,
-    "claude",
-    [
-      encodeFrame({
-        id: 1,
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: {
-          arguments: {
-            chat_id: "codex_999",
-            text: "ship it",
-          },
-          name: "reply",
+          name: "send_to_agent",
         },
       }),
       "\n",
@@ -626,12 +558,11 @@ test("bridge MCP reply rejects a mismatched bridge chat_id", async () => {
   expect(JSON.parse(result.stdout)).toMatchObject({
     error: {
       code: -32_602,
-      message: "reply chat_id does not match the active bridge conversation",
+      message: "send_to_agent cannot target the current agent",
     },
     id: 1,
     jsonrpc: "2.0",
   });
-  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -689,7 +620,7 @@ test("bridge MCP handles standard empty-list and ping requests through the Claud
   expect(result.stderr).toBe("");
   expect(result.stdout).toContain('"claude/channel":{}');
   expect(result.stdout).toContain(
-    '\\"reply\\" tool and pass back the same chat_id'
+    '\\"send_to_agent\\" with target: \\"codex\\" for Codex-facing messages'
   );
   expect(result.stdout).toContain(
     "Never answer the human when the inbound message came from Codex"
@@ -706,14 +637,6 @@ test("bridge MCP handles standard empty-list and ping requests through the Claud
   const tools = listedTools(result.stdout);
   expect(tools).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({
-        annotations: {
-          destructiveHint: false,
-          openWorldHint: false,
-          readOnlyHint: false,
-        },
-        name: "reply",
-      }),
       expect.objectContaining({
         annotations: {
           destructiveHint: false,
@@ -740,6 +663,8 @@ test("bridge MCP handles standard empty-list and ping requests through the Claud
       }),
     ])
   );
+  expect(tools).toHaveLength(3);
+  expect(tools.some((tool) => tool.name === "reply")).toBe(false);
   rmSync(root, { recursive: true, force: true });
 });
 
