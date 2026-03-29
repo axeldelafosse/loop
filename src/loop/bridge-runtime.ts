@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { spawnSync } from "bun";
 import { removeClaudeChannelServer } from "./bridge-claude-registration";
+import {
+  claudeChannelServerName,
+  legacyClaudeChannelServerName,
+} from "./bridge-config";
 import { CLAUDE_CHANNEL_USER } from "./bridge-constants";
 import {
   acknowledgeBridgeDelivery,
@@ -17,6 +21,7 @@ import { injectCodexMessage } from "./codex-app-server";
 import {
   isActiveRunState,
   parseRunLifecycleState,
+  readRunManifest,
   touchRunManifest,
   updateRunManifest,
 } from "./run-state";
@@ -106,14 +111,18 @@ const injectCodexTmuxMessage = async (
 };
 
 const tmuxSessionExists = (session: string): boolean => {
-  const result = bridgeRuntimeCommandDeps.spawnSync(
-    ["tmux", "has-session", "-t", session],
-    {
-      stderr: "ignore",
-      stdout: "ignore",
-    }
-  );
-  return result.exitCode === 0;
+  try {
+    const result = bridgeRuntimeCommandDeps.spawnSync(
+      ["tmux", "has-session", "-t", session],
+      {
+        stderr: "ignore",
+        stdout: "ignore",
+      }
+    );
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 };
 
 export interface BridgeRuntimeStatus extends BridgeStatus {
@@ -142,16 +151,22 @@ export const readBridgeRuntimeStatus = (
 };
 
 export const hasLiveCodexTmuxSession = (runDir: string): boolean => {
-  return readBridgeRuntimeStatus(runDir).hasLiveTmuxSession;
+  const manifest = readRunManifest(join(runDir, "manifest.json"));
+  return Boolean(
+    manifest?.tmuxSession && tmuxSessionExists(manifest.tmuxSession)
+  );
 };
 
 export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
-  let removedRunId = "";
+  let removedServerNames: string[] = [];
   const next = updateRunManifest(join(runDir, "manifest.json"), (manifest) => {
     if (!manifest?.tmuxSession) {
       return manifest;
     }
-    removedRunId = manifest.runId;
+    removedServerNames = [
+      claudeChannelServerName(manifest.runId, manifest.repoId),
+      legacyClaudeChannelServerName(manifest.runId),
+    ];
     return touchRunManifest(
       {
         ...manifest,
@@ -160,18 +175,20 @@ export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
       new Date().toISOString()
     );
   });
-  if (!(next && removedRunId)) {
+  if (!(next && removedServerNames.length > 0)) {
     return false;
   }
-  removeClaudeChannelServer(
-    removedRunId,
-    (args) =>
-      bridgeRuntimeCommandDeps.spawnSync(args, {
-        stderr: "pipe",
-        stdout: "ignore",
-      }),
-    console.error
-  );
+  for (const serverName of new Set(removedServerNames)) {
+    removeClaudeChannelServer(
+      serverName,
+      (args) =>
+        bridgeRuntimeCommandDeps.spawnSync(args, {
+          stderr: "pipe",
+          stdout: "ignore",
+        }),
+      console.error
+    );
+  }
   return true;
 };
 

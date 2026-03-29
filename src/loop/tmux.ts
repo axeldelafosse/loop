@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "bun";
-import { registerClaudeChannelServer as registerClaudeBridgeServer } from "./bridge-claude-registration";
+import {
+  registerClaudeChannelServer,
+  removeClaudeChannelServer,
+} from "./bridge-claude-registration";
 import {
   buildClaudeChannelServerConfig,
   claudeChannelServerName,
+  legacyClaudeChannelServerName,
 } from "./bridge-config";
 import {
   receiveMessagesStuckGuidance,
@@ -150,9 +154,11 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
-const pairedBridgeGuidance = (agent: Agent, runId: string): string => {
-  const serverName = claudeChannelServerName(runId);
-
+const pairedBridgeGuidance = (
+  agent: Agent,
+  _runId: string,
+  serverName: string
+): string => {
   if (agent === "claude") {
     return [
       `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
@@ -188,7 +194,8 @@ const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
 const buildPrimaryPrompt = (
   task: string,
   opts: Options,
-  runId: string
+  runId: string,
+  serverName: string
 ): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
@@ -198,7 +205,7 @@ const buildPrimaryPrompt = (
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
-  parts.push(pairedBridgeGuidance(opts.agent, runId));
+  parts.push(pairedBridgeGuidance(opts.agent, runId, serverName));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
     `${peer} should send a short ready message. Wait briefly if it arrives, then inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
@@ -210,7 +217,8 @@ const buildPeerPrompt = (
   task: string,
   opts: Options,
   agent: Agent,
-  runId: string
+  runId: string,
+  serverName: string
 ): string => {
   const primary = capitalize(opts.agent);
   const parts = [
@@ -219,7 +227,7 @@ const buildPeerPrompt = (
     `You are ${capitalize(agent)}. Do not start implementing or verifying this task on your own.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent, runId));
+  parts.push(pairedBridgeGuidance(agent, runId, serverName));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
     `Wait for ${primary} to send you a targeted request or review ask.`
@@ -229,7 +237,8 @@ const buildPeerPrompt = (
 
 const buildInteractivePrimaryPrompt = (
   opts: Options,
-  runId: string
+  runId: string,
+  serverName: string
 ): string => {
   const peer = capitalize(peerAgent(opts.agent));
   const parts = [
@@ -241,7 +250,7 @@ const buildInteractivePrimaryPrompt = (
   parts.push(
     `${SPAWN_TEAM_WITH_WORKTREE_ISOLATION} Apply that once the human gives you a concrete task.`
   );
-  parts.push(pairedBridgeGuidance(opts.agent, runId));
+  parts.push(pairedBridgeGuidance(opts.agent, runId, serverName));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
     `If the human asks for plan mode, write PLAN.md first, ask ${peer} for a plan review, iterate on PLAN.md, then ask the human to review the plan before implementing.`
@@ -255,7 +264,8 @@ const buildInteractivePrimaryPrompt = (
 const buildInteractivePeerPrompt = (
   opts: Options,
   agent: Agent,
-  runId: string
+  runId: string,
+  serverName: string
 ): string => {
   const primary = capitalize(opts.agent);
   const parts = [
@@ -264,7 +274,7 @@ const buildInteractivePeerPrompt = (
     `You are ${capitalize(agent)}. Stay idle until ${primary} sends a specific request or the human clearly assigns you separate work.`,
   ];
   appendProofPrompt(parts, opts.proof);
-  parts.push(pairedBridgeGuidance(agent, runId));
+  parts.push(pairedBridgeGuidance(agent, runId, serverName));
   parts.push(pairedWorkflowGuidance(opts, agent));
   parts.push(
     `If ${primary} asks for a plan review, review PLAN.md only, suggest concrete fixes, and wait for the next request.`
@@ -278,17 +288,18 @@ const buildInteractivePeerPrompt = (
 const buildLaunchPrompt = (
   launch: PairedTmuxLaunch,
   agent: Agent,
-  runId: string
+  runId: string,
+  serverName: string
 ): string => {
   const task = launch.task?.trim();
   if (!task) {
     return launch.opts.agent === agent
-      ? buildInteractivePrimaryPrompt(launch.opts, runId)
-      : buildInteractivePeerPrompt(launch.opts, agent, runId);
+      ? buildInteractivePrimaryPrompt(launch.opts, runId, serverName)
+      : buildInteractivePeerPrompt(launch.opts, agent, runId, serverName);
   }
   return launch.opts.agent === agent
-    ? buildPrimaryPrompt(task, launch.opts, runId)
-    : buildPeerPrompt(task, launch.opts, agent, runId);
+    ? buildPrimaryPrompt(task, launch.opts, runId, serverName)
+    : buildPeerPrompt(task, launch.opts, agent, runId, serverName);
 };
 
 const resolveTmuxModel = (agent: Agent, opts: Options): string => {
@@ -634,12 +645,33 @@ const updatePairedManifest = (
 
 const registerClaudeChannelServerForRun = (
   deps: TmuxDeps,
-  runId: string,
+  serverName: string,
   runDir: string
 ): void => {
-  registerClaudeBridgeServer(deps.launchArgv, runId, runDir, (args) =>
+  registerClaudeChannelServer(deps.launchArgv, serverName, runDir, (args) =>
     deps.spawn(args)
   );
+};
+
+const cleanupFailedPairedSessionStart = (
+  deps: TmuxDeps,
+  session: string,
+  serverName: string,
+  runId: string
+): void => {
+  try {
+    if (sessionExists(session, deps.spawn)) {
+      deps.spawn(["tmux", "kill-session", "-t", session]);
+    }
+  } catch {
+    // Best-effort cleanup after a failed paired startup.
+  }
+  for (const name of new Set([
+    serverName,
+    legacyClaudeChannelServerName(runId),
+  ])) {
+    removeClaudeChannelServer(name, (args) => deps.spawn(args), deps.log);
+  }
 };
 
 const ensurePairedSessionIds = async (
@@ -809,70 +841,95 @@ const startPairedSession = async (
     codexRemoteUrl,
     codexThreadId
   );
-  const claudeChannelServer = claudeChannelServerName(storage.runId);
-  registerClaudeChannelServerForRun(deps, storage.runId, storage.runDir);
-  const env = [`${RUN_BASE_ENV}=${runBase}`, `${RUN_ID_ENV}=${storage.runId}`];
-  const claudePrompt = buildLaunchPrompt(launch, "claude", storage.runId);
-  const codexPrompt = buildLaunchPrompt(launch, "codex", storage.runId);
-  const claudeCommand = buildShellCommand([
-    "env",
-    ...env,
-    ...buildClaudeCommand(
-      claudeSessionId,
-      resolveTmuxModel("claude", launch.opts),
-      claudeChannelServer,
-      hadClaudeSession,
-      hadClaudeSession ? undefined : claudePrompt
-    ),
-  ]);
-  const codexCommand = buildShellCommand([
-    "env",
-    ...env,
-    ...buildCodexCommand(
-      codexProxyUrl,
-      resolveTmuxModel("codex", launch.opts),
-      launch.opts.codexMcpConfigArgs ?? [],
-      hadCodexThread ? undefined : codexPrompt
-    ),
-  ]);
+  const claudeChannelServer =
+    manifest.claudeChannelServer ||
+    claudeChannelServerName(storage.runId, storage.repoId);
+  registerClaudeChannelServerForRun(deps, claudeChannelServer, storage.runDir);
+  try {
+    const env = [
+      `${RUN_BASE_ENV}=${runBase}`,
+      `${RUN_ID_ENV}=${storage.runId}`,
+    ];
+    const claudePrompt = buildLaunchPrompt(
+      launch,
+      "claude",
+      storage.runId,
+      claudeChannelServer
+    );
+    const codexPrompt = buildLaunchPrompt(
+      launch,
+      "codex",
+      storage.runId,
+      claudeChannelServer
+    );
+    const claudeCommand = buildShellCommand([
+      "env",
+      ...env,
+      ...buildClaudeCommand(
+        claudeSessionId,
+        resolveTmuxModel("claude", launch.opts),
+        claudeChannelServer,
+        hadClaudeSession,
+        hadClaudeSession ? undefined : claudePrompt
+      ),
+    ]);
+    const codexCommand = buildShellCommand([
+      "env",
+      ...env,
+      ...buildCodexCommand(
+        codexProxyUrl,
+        resolveTmuxModel("codex", launch.opts),
+        launch.opts.codexMcpConfigArgs ?? [],
+        hadCodexThread ? undefined : codexPrompt
+      ),
+    ]);
 
-  runTmuxCommand(deps, [
-    "tmux",
-    "new-session",
-    "-d",
-    ...buildSessionSizeArgs(deps),
-    "-s",
-    session,
-    "-c",
-    deps.cwd,
-    claudeCommand,
-  ]);
-  runTmuxCommand(
-    deps,
-    [
+    runTmuxCommand(deps, [
       "tmux",
-      "split-window",
-      "-h",
-      "-t",
-      `${session}:0`,
+      "new-session",
+      "-d",
+      ...buildSessionSizeArgs(deps),
+      "-s",
+      session,
       "-c",
       deps.cwd,
-      codexCommand,
-    ],
-    "Failed to split tmux window"
-  );
-  deps.spawn([
-    "tmux",
-    "select-layout",
-    "-t",
-    `${session}:0`,
-    "even-horizontal",
-  ]);
-  await unblockClaudePane(session, deps);
-  const primaryPane =
-    launch.opts.agent === "claude" ? `${session}:0.0` : `${session}:0.1`;
-  deps.spawn(["tmux", "select-pane", "-t", primaryPane]);
-  return session;
+      claudeCommand,
+    ]);
+    runTmuxCommand(
+      deps,
+      [
+        "tmux",
+        "split-window",
+        "-h",
+        "-t",
+        `${session}:0`,
+        "-c",
+        deps.cwd,
+        codexCommand,
+      ],
+      "Failed to split tmux window"
+    );
+    deps.spawn([
+      "tmux",
+      "select-layout",
+      "-t",
+      `${session}:0`,
+      "even-horizontal",
+    ]);
+    await unblockClaudePane(session, deps);
+    const primaryPane =
+      launch.opts.agent === "claude" ? `${session}:0.0` : `${session}:0.1`;
+    deps.spawn(["tmux", "select-pane", "-t", primaryPane]);
+    return session;
+  } catch (error: unknown) {
+    cleanupFailedPairedSessionStart(
+      deps,
+      session,
+      claudeChannelServer,
+      storage.runId
+    );
+    throw error;
+  }
 };
 
 const startRequestedSession = (

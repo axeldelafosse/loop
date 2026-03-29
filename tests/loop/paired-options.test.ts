@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -51,6 +51,44 @@ test("preparePairedOptions accepts a raw session id without creating a paired ma
     expect(opts.pairedSessionIds).toEqual({
       claude: "claude-session-raw",
     });
+  } finally {
+    if (originalHome === undefined) {
+      Reflect.deleteProperty(process.env, "HOME");
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalRunId === undefined) {
+      Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+    } else {
+      process.env.LOOP_RUN_ID = originalRunId;
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("preparePairedOptions writes a repo-scoped Claude bridge server for fresh runs", () => {
+  const home = makeTempHome();
+  const originalHome = process.env.HOME;
+  const originalRunId = process.env.LOOP_RUN_ID;
+  process.env.HOME = home;
+  Reflect.deleteProperty(process.env, "LOOP_RUN_ID");
+
+  try {
+    const opts = makeOptions({ agent: "claude", pairedMode: true });
+
+    preparePairedOptions(opts, process.cwd(), true);
+
+    const storage = resolveRunStorage("1", process.cwd(), home);
+    const manifest = readRunManifest(storage.manifestPath);
+    expect(manifest?.claudeChannelServer).toBe(
+      `loop-bridge-${storage.repoId}-1`
+    );
+    const configPath = opts.claudeMcpConfigPath;
+    expect(configPath).toBeDefined();
+    const config = JSON.parse(readFileSync(configPath ?? "", "utf8"));
+    expect(Object.keys(config.mcpServers)).toEqual([
+      `loop-bridge-${storage.repoId}-1`,
+    ]);
   } finally {
     if (originalHome === undefined) {
       Reflect.deleteProperty(process.env, "HOME");

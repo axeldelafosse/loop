@@ -46,8 +46,16 @@ const buildBridgeFileConfig = (
   },
 });
 
-export const claudeChannelServerName = (runId: string): string =>
+export const legacyClaudeChannelServerName = (runId: string): string =>
   `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
+
+export const claudeChannelServerName = (
+  runId: string,
+  repoId?: string
+): string =>
+  repoId?.trim()
+    ? `${BRIDGE_SERVER}-${sanitizeBase(repoId)}-${sanitizeBase(runId)}`
+    : legacyClaudeChannelServerName(runId);
 
 export const buildClaudeChannelServerConfig = (
   launchArgv: string[],

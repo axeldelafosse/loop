@@ -282,7 +282,10 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   );
 
   const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=1"];
-  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName("1");
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
+    "1",
+    storage.repoId
+  );
   const claudeChannelConfig = tmuxInternals.buildClaudeChannelServerConfig(
     ["bun", "/repo/src/cli.ts"],
     storage.runDir
@@ -291,7 +294,8 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     "Ship feature",
     opts,
     "claude",
-    "1"
+    "1",
+    claudeChannelServer
   );
   const claudeCommand = tmuxInternals.buildShellCommand([
     "env",
@@ -311,7 +315,12 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       codexProxyUrl,
       "test-model",
       codexMcpConfigArgs,
-      tmuxInternals.buildPrimaryPrompt("Ship feature", opts, "1")
+      tmuxInternals.buildPrimaryPrompt(
+        "Ship feature",
+        opts,
+        "1",
+        claudeChannelServer
+      )
     ),
   ]);
 
@@ -628,11 +637,15 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
   expect(delegated).toBe(true);
   expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
   const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=1"];
-  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName("1");
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
+    "1",
+    storage.repoId
+  );
   const claudePrompt = tmuxInternals.buildInteractivePeerPrompt(
     opts,
     "claude",
-    "1"
+    "1",
+    claudeChannelServer
   );
   const claudeCommand = tmuxInternals.buildShellCommand([
     "env",
@@ -662,7 +675,11 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
       "ws://127.0.0.1:4600/",
       "test-model",
       ["-c", 'mcp_servers.loop-bridge.command="loop"'],
-      tmuxInternals.buildInteractivePrimaryPrompt(opts, "1")
+      tmuxInternals.buildInteractivePrimaryPrompt(
+        opts,
+        "1",
+        claudeChannelServer
+      )
     ),
   ]);
   expect(calls[3]).toEqual([
@@ -748,16 +765,22 @@ test("runInTmux keeps the no-prompt Claude startup wait bounded", async () => {
 
 test("tmux prompts keep the paired review workflow explicit", () => {
   const opts = makePairedOptions();
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
+    "1",
+    "repo-123"
+  );
   const primaryPrompt = tmuxInternals.buildPrimaryPrompt(
     "Ship feature",
     opts,
-    "1"
+    "1",
+    claudeChannelServer
   );
   const peerPrompt = tmuxInternals.buildPeerPrompt(
     "Ship feature",
     opts,
     "claude",
-    "1"
+    "1",
+    claudeChannelServer
   );
 
   expect(primaryPrompt).toContain("Agent-to-agent pair programming");
@@ -780,17 +803,26 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain(
     'Use "send_to_agent" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
   );
-  expect(primaryPrompt).not.toContain("mcp__loop-bridge-1__ prefix");
-  expect(peerPrompt).toContain("mcp__loop-bridge-1__ prefix");
+  expect(primaryPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).toContain("mcp__loop-bridge-repo-123-1__ prefix");
 });
 
 test("interactive tmux prompts tell both agents to wait for the human", () => {
   const opts = makePairedOptions({ proof: "" });
-  const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(opts, "1");
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
+    "1",
+    "repo-123"
+  );
+  const primaryPrompt = tmuxInternals.buildInteractivePrimaryPrompt(
+    opts,
+    "1",
+    claudeChannelServer
+  );
   const peerPrompt = tmuxInternals.buildInteractivePeerPrompt(
     opts,
     "claude",
-    "1"
+    "1",
+    claudeChannelServer
   );
 
   expect(primaryPrompt).toContain("Agent-to-agent pair programming");
@@ -816,8 +848,8 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(peerPrompt).toContain(
     "If you are answering Codex, use the bridge tools instead of a human-facing reply."
   );
-  expect(primaryPrompt).not.toContain("mcp__loop-bridge-1__ prefix");
-  expect(peerPrompt).toContain("mcp__loop-bridge-1__ prefix");
+  expect(primaryPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).toContain("mcp__loop-bridge-repo-123-1__ prefix");
 });
 
 test("runInTmux auto-confirms Claude startup prompts in paired mode", async () => {
@@ -1406,8 +1438,10 @@ test("runInTmux reopens paired tmux panes without replaying the task", async () 
   );
 
   const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=alpha"];
-  const claudeChannelServer =
-    tmuxInternals.buildClaudeChannelServerName("alpha");
+  const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
+    "alpha",
+    storage.repoId
+  );
   const claudeChannelConfig = tmuxInternals.buildClaudeChannelServerConfig(
     ["bun", "/repo/src/cli.ts"],
     storage.runDir
@@ -2023,6 +2057,96 @@ test("runInTmux surfaces tmux startup errors", async () => {
       spawn: () => ({ exitCode: 1, stderr: "boom" }),
     })
   ).rejects.toThrow("Failed to start tmux session: boom");
+});
+
+test("runInTmux removes the Claude bridge server when paired tmux startup fails", async () => {
+  const calls: string[][] = [];
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "1",
+    status: "running",
+  });
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: "/repo/.loop/runs/1/manifest.json",
+    repoId: "repo-123",
+    runDir: "/repo/.loop/runs/1",
+    runId: "1",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/1/transcript.jsonl",
+  };
+
+  await expect(
+    runInTmux(
+      ["--tmux", "--proof", "verify with tests"],
+      {
+        capturePane: () => "",
+        cwd: "/repo",
+        env: {},
+        findBinary: () => true,
+        getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+        getLastCodexThreadId: () => "codex-thread-1",
+        isInteractive: () => false,
+        launchArgv: ["bun", "/repo/src/cli.ts"],
+        log: (): void => undefined,
+        makeClaudeSessionId: () => "claude-session-1",
+        preparePairedRun: (nextOpts) => {
+          nextOpts.codexMcpConfigArgs = [
+            "-c",
+            'mcp_servers.loop-bridge.command="loop"',
+          ];
+          return { manifest, storage };
+        },
+        sendKeys: (): void => undefined,
+        sendText: (): void => undefined,
+        sleep: () => Promise.resolve(),
+        startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+        startPersistentAgentSession: () => Promise.resolve(undefined),
+        spawn: (args: string[]) => {
+          calls.push(args);
+          if (args[0] === "tmux" && args[1] === "has-session") {
+            return { exitCode: 1, stderr: "" };
+          }
+          if (args[0] === "tmux" && args[1] === "new-session") {
+            return { exitCode: 1, stderr: "boom" };
+          }
+          return { exitCode: 0, stderr: "" };
+        },
+        updateRunManifest: (_path, update) => {
+          manifest = update(manifest) ?? manifest;
+          return manifest;
+        },
+      },
+      { opts, task: "Ship feature" }
+    )
+  ).rejects.toThrow("Failed to start tmux session: boom");
+
+  expect(calls).toContainEqual([
+    "claude",
+    "mcp",
+    "add-json",
+    "--scope",
+    "local",
+    tmuxInternals.buildClaudeChannelServerName("1", "repo-123"),
+    tmuxInternals.buildClaudeChannelServerConfig(
+      ["bun", "/repo/src/cli.ts"],
+      storage.runDir
+    ),
+  ]);
+  expect(calls).toContainEqual([
+    "claude",
+    "mcp",
+    "remove",
+    "--scope",
+    "local",
+    tmuxInternals.buildClaudeChannelServerName("1", "repo-123"),
+  ]);
+  expect(
+    calls.some((args) => args[0] === "tmux" && args[1] === "kill-session")
+  ).toBe(false);
 });
 
 test("runInTmux skips auto-attach for non-interactive sessions", async () => {

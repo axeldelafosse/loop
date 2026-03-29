@@ -40,6 +40,16 @@ export const canResumePairedManifest = (manifest?: RunManifest): boolean => {
   return manifest ? isActiveRunState(manifest.state) : false;
 };
 
+const resolveClaudeBridgeServer = (
+  storage: RunStorage,
+  manifest?: RunManifest
+): string => {
+  return (
+    manifest?.claudeChannelServer ??
+    claudeChannelServerName(storage.runId, storage.repoId)
+  );
+};
+
 const resolveRequestedRunState = (
   opts: Options,
   cwd: string
@@ -117,6 +127,7 @@ export const resolvePreparedRunState = (
   }
 
   const manifest = createRunManifest({
+    claudeChannelServer: claudeChannelServerName(storage.runId, storage.repoId),
     claudeSessionId: "",
     codexThreadId: "",
     cwd,
@@ -143,7 +154,7 @@ export const applyPairedOptions = (
   opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(
     storage.runDir,
     "claude",
-    claudeChannelServerName(storage.runId)
+    resolveClaudeBridgeServer(storage, manifest)
   );
   opts.claudePersistentSession = true;
   opts.codexMcpConfigArgs = buildCodexBridgeConfigArgs(storage.runDir, "codex");
@@ -181,6 +192,7 @@ export const preparePairedRun = (
     ? touchRunManifest(
         {
           ...existing,
+          claudeChannelServer: resolveClaudeBridgeServer(storage, existing),
           claudeSessionId:
             resumable?.claudeSessionId || opts.pairedSessionIds?.claude || "",
           codexThreadId:
@@ -195,6 +207,10 @@ export const preparePairedRun = (
         new Date().toISOString()
       )
     : createRunManifest({
+        claudeChannelServer: claudeChannelServerName(
+          storage.runId,
+          storage.repoId
+        ),
         claudeSessionId: opts.pairedSessionIds?.claude ?? "",
         codexThreadId: opts.pairedSessionIds?.codex ?? "",
         cwd,

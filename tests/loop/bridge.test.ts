@@ -28,19 +28,23 @@ const loadBridge = (
   const nonce = Date.now();
   return Promise.all([
     import(`../../src/loop/bridge?test=${nonce}`),
+    import(`../../src/loop/bridge-claude-registration?test=${nonce}`),
     import(`../../src/loop/bridge-dispatch?test=${nonce}`),
     import(`../../src/loop/bridge-config?test=${nonce}`),
     import(`../../src/loop/bridge-constants?test=${nonce}`),
     import(`../../src/loop/bridge-runtime?test=${nonce}`),
     import(`../../src/loop/bridge-store?test=${nonce}`),
-  ]).then(([bridge, dispatch, config, constants, runtime, store]) => ({
-    ...bridge,
-    ...dispatch,
-    ...config,
-    ...constants,
-    ...runtime,
-    ...store,
-  }));
+  ]).then(
+    ([bridge, registration, dispatch, config, constants, runtime, store]) => ({
+      ...bridge,
+      ...registration,
+      ...dispatch,
+      ...config,
+      ...constants,
+      ...runtime,
+      ...store,
+    })
+  );
 };
 
 const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-bridge-"));
@@ -75,11 +79,13 @@ const toolText = (stdout: string, id: number): string => {
 const runBridgeProcess = async (
   runDir: string,
   source: "claude" | "codex",
-  frames: string
+  frames: string,
+  env?: NodeJS.ProcessEnv
 ): Promise<{ code: number | null; stderr: string; stdout: string }> => {
   const cli = join(process.cwd(), "src", "cli.ts");
-  const child = spawn("bun", [cli, "__bridge-mcp", runDir, source], {
+  const child = spawn(process.execPath, [cli, "__bridge-mcp", runDir, source], {
     cwd: process.cwd(),
+    env,
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
@@ -220,7 +226,7 @@ test("readBridgeStatus derives bridge naming and transport fields", async () => 
   expect(bridge.readBridgeStatus(runDir)).toMatchObject({
     bridgeServer: bridge.BRIDGE_SERVER,
     claudeBridgeMode: "mcp-config",
-    claudeChannelServer: bridge.claudeChannelServerName("7"),
+    claudeChannelServer: bridge.claudeChannelServerName("7", "repo-123"),
     claudeSessionId: "claude-session-1",
     codexRemoteUrl: "ws://127.0.0.1:4500",
     codexThreadId: "codex-thread-1",
@@ -295,7 +301,7 @@ test("readBridgeRuntimeStatus distinguishes live and stale tmux delivery", async
 
   expect(bridge.readBridgeRuntimeStatus(liveRunDir)).toMatchObject({
     claudeBridgeMode: "local-registration",
-    claudeChannelServer: bridge.claudeChannelServerName("8"),
+    claudeChannelServer: bridge.claudeChannelServerName("8", "repo-123"),
     codexDeliveryMode: "tmux",
     hasCodexRemote: true,
     hasLiveTmuxSession: true,
@@ -303,7 +309,7 @@ test("readBridgeRuntimeStatus distinguishes live and stale tmux delivery", async
   });
   expect(bridge.readBridgeRuntimeStatus(staleRunDir)).toMatchObject({
     claudeBridgeMode: "local-registration",
-    claudeChannelServer: bridge.claudeChannelServerName("9"),
+    claudeChannelServer: bridge.claudeChannelServerName("9", "repo-123"),
     codexDeliveryMode: "app-server",
     hasCodexRemote: true,
     hasLiveTmuxSession: false,
@@ -791,7 +797,7 @@ test("bridge runtime status reports app-server-backed config-file delivery", asy
 
   expect(bridge.readBridgeRuntimeStatus(runDir)).toMatchObject({
     claudeBridgeMode: "mcp-config",
-    claudeChannelServer: bridge.claudeChannelServerName("7"),
+    claudeChannelServer: bridge.claudeChannelServerName("7", "repo-123"),
     codexDeliveryMode: "app-server",
     hasCodexRemote: true,
     hasLiveTmuxSession: false,
@@ -831,7 +837,7 @@ test("bridge runtime status reports live tmux delivery with a run-scoped Claude 
 
   expect(bridge.readBridgeRuntimeStatus(runDir)).toMatchObject({
     claudeBridgeMode: "local-registration",
-    claudeChannelServer: "loop-bridge-8",
+    claudeChannelServer: "loop-bridge-repo-123-8",
     codexDeliveryMode: "tmux",
     hasCodexRemote: false,
     hasLiveTmuxSession: true,
@@ -881,10 +887,60 @@ test("bridge MCP bridge_status includes runtime delivery fields", async () => {
   expect(result.stderr).toBe("");
   const status = toolText(result.stdout, 1);
   expect(status).toContain('"claudeBridgeMode": "mcp-config"');
-  expect(status).toContain('"claudeChannelServer": "loop-bridge-7"');
+  expect(status).toContain('"claudeChannelServer": "loop-bridge-repo-123-7"');
   expect(status).toContain('"codexDeliveryMode": "app-server"');
   expect(status).toContain('"hasCodexRemote": true');
   expect(status).toContain('"hasLiveTmuxSession": false');
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge MCP bridge_status tolerates a missing tmux binary", async () => {
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      claudeSessionId: "claude-session-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      state: "submitted",
+      status: "running",
+      tmuxSession: "repo-loop-7",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  const result = await runBridgeProcess(
+    runDir,
+    "codex",
+    encodeLine({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        arguments: {},
+        name: "bridge_status",
+      },
+    }),
+    { ...process.env, PATH: "/definitely-missing" }
+  );
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  const status = toolText(result.stdout, 1);
+  expect(status).toContain('"claudeChannelServer": "loop-bridge-repo-123-7"');
+  expect(status).toContain('"codexDeliveryMode": "app-server"');
+  expect(status).toContain('"hasLiveTmuxSession": false');
+  expect(status).toContain('"hasTmuxSession": true');
 
   rmSync(root, { recursive: true, force: true });
 });
@@ -1049,7 +1105,7 @@ test("bridge falls back to direct Codex delivery when the stored tmux session is
     "remove",
     "--scope",
     "local",
-    bridge.claudeChannelServerName("8"),
+    bridge.claudeChannelServerName("8", "repo-123"),
   ]);
   expect(removeCall?.[1]).toMatchObject({
     stderr: "pipe",
@@ -1212,7 +1268,7 @@ test("bridge stale tmux cleanup logs non-zero Claude MCP remove exits", async ()
   try {
     expect(bridge.clearStaleTmuxBridgeState(runDir)).toBe(true);
     expect(errorSpy).toHaveBeenCalledWith(
-      '[loop] failed to remove Claude channel server "loop-bridge-8": command failed'
+      '[loop] failed to remove Claude channel server "loop-bridge-repo-123-8": command failed'
     );
     expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
       undefined
@@ -1257,7 +1313,7 @@ test("bridge stale tmux cleanup logs thrown Claude MCP remove errors", async () 
   try {
     expect(bridge.clearStaleTmuxBridgeState(runDir)).toBe(true);
     expect(errorSpy).toHaveBeenCalledWith(
-      '[loop] failed to remove Claude channel server "loop-bridge-8": spawn failed'
+      '[loop] failed to remove Claude channel server "loop-bridge-repo-123-8": spawn failed'
     );
     expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
       undefined
@@ -1318,7 +1374,7 @@ test("runBridgeWorker clears stale tmux routing and exits", async () => {
           "remove",
           "--scope",
           "local",
-          bridge.claudeChannelServerName("8"),
+          bridge.claudeChannelServerName("8", "repo-123"),
         ],
         expect.objectContaining({ stderr: "pipe", stdout: "ignore" }),
       ],
@@ -1651,6 +1707,40 @@ test("bridge config helper writes the Claude MCP config file", async () => {
   });
 
   rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge config helper writes the Claude MCP config file for a custom server", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  const serverName = bridge.claudeChannelServerName("1", "repo-123");
+
+  const path = bridge.ensureClaudeBridgeConfig(runDir, "claude", serverName);
+  expect(path).toBe(join(runDir, "claude-mcp.json"));
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+    mcpServers: {
+      [serverName]: {
+        args: ["src/loop/main.ts", bridge.BRIDGE_SUBCOMMAND, runDir, "claude"],
+        command: "/opt/bun",
+        type: "stdio",
+      },
+    },
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge registration helper throws on unexpected Claude MCP add-json failures", async () => {
+  const bridge = await loadBridge();
+
+  expect(() =>
+    bridge.registerClaudeChannelServer(
+      ["/opt/bun", "src/loop/main.ts"],
+      bridge.claudeChannelServerName("7", "repo-123"),
+      "/tmp/run",
+      () => ({ exitCode: 1, stderr: "command failed" })
+    )
+  ).toThrow("[loop] failed to register Claude channel server: command failed");
 });
 
 test("dispatchBridgeMessage reports delivered when direct codex delivery succeeds", async () => {

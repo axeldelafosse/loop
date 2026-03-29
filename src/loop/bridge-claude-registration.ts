@@ -1,7 +1,4 @@
-import {
-  buildClaudeChannelServerConfig,
-  claudeChannelServerName,
-} from "./bridge-config";
+import { buildClaudeChannelServerConfig } from "./bridge-config";
 
 const CLAUDE_CHANNEL_SCOPE = "local";
 const MCP_ALREADY_EXISTS_RE = /already exists/i;
@@ -35,7 +32,7 @@ const logClaudeChannelServerRemovalFailure = (
 
 export const registerClaudeChannelServer = (
   launchArgv: string[],
-  runId: string,
+  serverName: string,
   runDir: string,
   runCommand: BridgeCommand
 ): void => {
@@ -45,7 +42,7 @@ export const registerClaudeChannelServer = (
     "add-json",
     "--scope",
     CLAUDE_CHANNEL_SCOPE,
-    claudeChannelServerName(runId),
+    serverName,
     buildClaudeChannelServerConfig(launchArgv, runDir),
   ]);
   const stderr = stderrText(result.stderr);
@@ -57,14 +54,13 @@ export const registerClaudeChannelServer = (
 };
 
 export const removeClaudeChannelServer = (
-  runId: string,
+  serverName: string,
   runCommand: BridgeCommand,
   log: (line: string) => void = console.error
 ): void => {
-  if (!runId) {
+  if (!serverName) {
     return;
   }
-  const serverName = claudeChannelServerName(runId);
   try {
     const result = runCommand([
       "claude",
