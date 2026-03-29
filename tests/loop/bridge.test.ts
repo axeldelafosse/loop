@@ -302,7 +302,7 @@ test("readBridgeRuntimeStatus distinguishes live and stale tmux delivery", async
   expect(bridge.readBridgeRuntimeStatus(liveRunDir)).toMatchObject({
     claudeBridgeMode: "local-registration",
     claudeChannelServer: bridge.claudeChannelServerName("8", "repo-123"),
-    codexDeliveryMode: "tmux",
+    codexDeliveryMode: "app-server",
     hasCodexRemote: true,
     hasLiveTmuxSession: true,
     hasTmuxSession: true,
@@ -1030,6 +1030,64 @@ test("bridge delivers Claude replies directly to Codex when app-server state is 
     "ws://127.0.0.1:4500",
     "codex-thread-1",
     "The files look good to me."
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  expect(
+    bridge.bridgeInternals
+      .readBridgeEvents(runDir)
+      .filter((event) => event.kind === "delivered")
+  ).toHaveLength(1);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("bridge prefers Codex app-server delivery even when tmux is live", async () => {
+  const injectCodexMessage = mock(async () => true);
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      return { exitCode: 0 };
+    }
+    return { exitCode: 1 };
+  });
+  const bridge = await loadBridge({ injectCodexMessage });
+  bridge.bridgeRuntimeCommandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      status: "running",
+      tmuxSession: "repo-loop-7",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  const message = {
+    at: "2026-03-23T10:01:00.000Z",
+    id: "msg-live",
+    kind: "message" as const,
+    message: "Please steer this into the active turn.",
+    source: "claude" as const,
+    target: "codex" as const,
+  };
+
+  bridge.bridgeInternals.appendBridgeEvent(runDir, message);
+  const delivered = await bridge.deliverCodexBridgeMessage(runDir, message);
+
+  expect(delivered).toBe(true);
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "Please steer this into the active turn."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(

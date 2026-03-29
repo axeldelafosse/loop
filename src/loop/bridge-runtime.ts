@@ -197,10 +197,10 @@ export const readBridgeRuntimeStatus = (
     status.tmuxSession && tmuxSessionExists(status.tmuxSession)
   );
   let codexDeliveryMode: BridgeRuntimeStatus["codexDeliveryMode"] = "none";
-  if (hasLiveTmuxSession) {
-    codexDeliveryMode = "tmux";
-  } else if (status.hasCodexRemote) {
+  if (status.hasCodexRemote) {
     codexDeliveryMode = "app-server";
+  } else if (hasLiveTmuxSession) {
+    codexDeliveryMode = "tmux";
   }
   return {
     ...status,
@@ -321,10 +321,7 @@ export const deliverCodexBridgeMessage = async (
   message: BridgeMessage
 ): Promise<boolean> => {
   const status = readBridgeRuntimeStatus(runDir);
-  if (status.hasLiveTmuxSession) {
-    return false;
-  }
-  if (status.tmuxSession) {
+  if (status.tmuxSession && !status.hasLiveTmuxSession) {
     clearStaleTmuxBridgeState(runDir);
   }
   if (!status.hasCodexRemote) {
@@ -379,7 +376,7 @@ export const drainCodexAppServerMessages = (
   runDir: string
 ): Promise<boolean> => {
   const status = readBridgeRuntimeStatus(runDir);
-  if (status.hasLiveTmuxSession || !status.hasCodexRemote) {
+  if (!status.hasCodexRemote) {
     return Promise.resolve(false);
   }
   const message = readNextPendingBridgeMessageForTarget(runDir, "codex");
@@ -405,10 +402,10 @@ export const runBridgeWorker = async (runDir: string): Promise<void> => {
         clearStaleTmuxBridgeState(runDir);
         return;
       }
-      const delivered = status.hasLiveTmuxSession
-        ? await drainCodexTmuxMessages(runDir)
-        : await drainCodexAppServerMessages(runDir);
-      if (!(status.hasLiveTmuxSession || status.hasCodexRemote)) {
+      const delivered = status.hasCodexRemote
+        ? await drainCodexAppServerMessages(runDir)
+        : await drainCodexTmuxMessages(runDir);
+      if (!(status.hasCodexRemote || status.hasLiveTmuxSession)) {
         return;
       }
       await wait(
