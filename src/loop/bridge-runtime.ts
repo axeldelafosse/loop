@@ -337,7 +337,11 @@ export const deliverCodexBridgeMessage = async (
       message.message
     );
     if (delivered) {
-      acknowledgeBridgeDelivery(runDir, message, "sent to codex app-server");
+      acknowledgeBridgeDelivery(
+        runDir,
+        message,
+        "accepted by codex app-server"
+      );
     }
     return delivered;
   } catch {

@@ -67,7 +67,9 @@ export const DEFAULT_CODEX_TRANSPORT: TransportMode =
 const METHOD_INITIALIZE = "initialize";
 const METHOD_INITIALIZED = "initialized";
 const METHOD_THREAD_START = "thread/start";
+const METHOD_THREAD_READ = "thread/read";
 const METHOD_TURN_START = "turn/start";
+const METHOD_TURN_STEER = "turn/steer";
 const METHOD_TURN_COMPLETED = "turn/completed";
 const METHOD_ERROR = "error";
 const METHOD_ITEM_COMPLETED = "item/completed";
@@ -210,6 +212,18 @@ const parseErrorText = (value: unknown): string | undefined => {
   );
 };
 
+const isBusyTurnError = (value: unknown): boolean => {
+  const message = parseErrorText(value)?.toLowerCase();
+  return !!(
+    message &&
+    (message.includes("active turn") ||
+      message.includes("already active") ||
+      message.includes("busy") ||
+      message.includes("in progress") ||
+      message.includes("turn still active"))
+  );
+};
+
 const extractTurnId = (value: unknown): string | undefined => {
   const record = asRecord(value);
   const fromValue = asString(record.turnId) ?? asString(record.turn_id);
@@ -235,6 +249,20 @@ const extractTurnFromStart = (value: unknown): { id?: string } => {
   const record = asRecord(value);
   const turn = asRecord(record.turn);
   return { id: asString(turn.id) || asString(record.id) };
+};
+
+const extractActiveTurnId = (value: unknown): string | undefined => {
+  const thread = asRecord(asRecord(value).thread);
+  if (!Array.isArray(thread.turns)) {
+    return undefined;
+  }
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const turn = asRecord(thread.turns[index]);
+    if (asString(turn.status) === "inProgress") {
+      return asString(turn.id);
+    }
+  }
+  return undefined;
 };
 
 const buildInput = (prompt: string): Record<string, unknown>[] => [
@@ -1386,16 +1414,51 @@ export const injectCodexMessage = async (
       },
     });
     client.sendNotification(METHOD_INITIALIZED);
-    const response = await client.sendRequest(METHOD_TURN_START, {
-      input: buildInput(prompt),
-      threadId,
-    });
-    const turn = extractTurnFromStart(response);
-    if (!turn.id) {
-      throw new Error("codex app-server returned turn/start without turn id");
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let activeTurnId: string | undefined;
+      try {
+        const thread = await client.sendRequest(METHOD_THREAD_READ, {
+          includeTurns: true,
+          threadId,
+        });
+        activeTurnId = extractActiveTurnId(thread);
+      } catch {
+        activeTurnId = undefined;
+      }
+
+      if (activeTurnId) {
+        try {
+          await client.sendRequest(METHOD_TURN_STEER, {
+            expectedTurnId: activeTurnId,
+            input: buildInput(prompt),
+            threadId,
+          });
+          return true;
+        } catch {
+          // The active turn may have already completed. Fall through to start.
+        }
+      }
+
+      try {
+        const response = await client.sendRequest(METHOD_TURN_START, {
+          input: buildInput(prompt),
+          threadId,
+        });
+        const turn = extractTurnFromStart(response);
+        if (!turn.id) {
+          throw new Error(
+            "codex app-server returned turn/start without turn id"
+          );
+        }
+        return true;
+      } catch (error) {
+        if (!(attempt === 0 && isBusyTurnError(error))) {
+          throw error;
+        }
+      }
     }
-    await client.waitForTurnCompletion(turn.id);
-    return true;
+    return false;
   } finally {
     client.close();
   }
