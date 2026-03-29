@@ -1,11 +1,15 @@
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "bun";
+import { spawn, spawnSync } from "bun";
 import { removeClaudeChannelServer } from "./bridge-claude-registration";
 import {
   claudeChannelServerName,
   legacyClaudeChannelServerName,
 } from "./bridge-config";
-import { CLAUDE_CHANNEL_USER } from "./bridge-constants";
+import {
+  BRIDGE_WORKER_SUBCOMMAND,
+  CLAUDE_CHANNEL_USER,
+} from "./bridge-constants";
 import {
   acknowledgeBridgeDelivery,
   bridgeChatId,
@@ -18,6 +22,8 @@ import {
   readBridgeStatus,
 } from "./bridge-store";
 import { injectCodexMessage } from "./codex-app-server";
+import { buildLaunchArgv } from "./launch";
+import { DETACH_CHILD_PROCESS } from "./process";
 import {
   isActiveRunState,
   parseRunLifecycleState,
@@ -29,12 +35,65 @@ import {
 const CLAUDE_CHANNEL_METHOD = "notifications/claude/channel";
 const CLAUDE_CHANNEL_SOURCE_TYPE = "codex";
 const CLAUDE_CHANNEL_USER_ID = "codex";
+const BRIDGE_WORKER_FILE = "bridge-worker.json";
+const BRIDGE_WORKER_IDLE_DELAY_MS = 250;
+const BRIDGE_WORKER_SUCCESS_DELAY_MS = 100;
 const CODEX_TMUX_PANE = "0.1";
 const CODEX_TMUX_READY_DELAY_MS = 250;
 const CODEX_TMUX_READY_POLLS = 20;
 const CODEX_TMUX_SEND_FOOTER = "Ctrl+J newline";
 
-export const bridgeRuntimeCommandDeps = { spawnSync };
+export const bridgeRuntimeCommandDeps = { spawn, spawnSync };
+
+const bridgeWorkerPath = (runDir: string): string =>
+  join(runDir, BRIDGE_WORKER_FILE);
+
+const readBridgeWorkerPid = (runDir: string): number | undefined => {
+  const path = bridgeWorkerPath(runDir);
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { pid?: unknown }).pid === "number" &&
+      Number.isInteger((parsed as { pid: number }).pid) &&
+      (parsed as { pid: number }).pid > 0
+    ) {
+      return (parsed as { pid: number }).pid;
+    }
+  } catch {
+    // ignore malformed worker state
+  }
+  return undefined;
+};
+
+const writeBridgeWorkerPid = (runDir: string, pid: number): void => {
+  writeFileSync(
+    bridgeWorkerPath(runDir),
+    `${JSON.stringify({ pid })}\n`,
+    "utf8"
+  );
+};
+
+const clearBridgeWorkerPid = (runDir: string, pid?: number): void => {
+  const current = readBridgeWorkerPid(runDir);
+  if (pid !== undefined && current !== pid) {
+    return;
+  }
+  rmSync(bridgeWorkerPath(runDir), { force: true });
+};
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const wait = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
@@ -148,6 +207,39 @@ export const readBridgeRuntimeStatus = (
     codexDeliveryMode,
     hasLiveTmuxSession,
   };
+};
+
+export const ensureBridgeWorker = (runDir: string): boolean => {
+  const status = readBridgeRuntimeStatus(runDir);
+  const state = parseRunLifecycleState(status.state);
+  if (!(status.hasCodexRemote && state && isActiveRunState(state))) {
+    return false;
+  }
+  const currentPid = readBridgeWorkerPid(runDir);
+  if (currentPid && isProcessAlive(currentPid)) {
+    return true;
+  }
+  clearBridgeWorkerPid(runDir);
+  try {
+    const child = bridgeRuntimeCommandDeps.spawn(
+      [...buildLaunchArgv(), BRIDGE_WORKER_SUBCOMMAND, runDir],
+      {
+        detached: DETACH_CHILD_PROCESS,
+        env: process.env,
+        stderr: "ignore",
+        stdin: "ignore",
+        stdout: "ignore",
+      }
+    );
+    if (!(typeof child.pid === "number" && child.pid > 0)) {
+      return false;
+    }
+    writeBridgeWorkerPid(runDir, child.pid);
+    child.unref?.();
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const hasLiveCodexTmuxSession = (runDir: string): boolean => {
@@ -279,21 +371,47 @@ export const drainCodexTmuxMessages = async (
   return true;
 };
 
+export const drainCodexAppServerMessages = (
+  runDir: string
+): Promise<boolean> => {
+  const status = readBridgeRuntimeStatus(runDir);
+  if (status.hasLiveTmuxSession || !status.hasCodexRemote) {
+    return Promise.resolve(false);
+  }
+  const message = readNextPendingBridgeMessageForTarget(runDir, "codex");
+  if (!message) {
+    return Promise.resolve(false);
+  }
+  return deliverCodexBridgeMessage(runDir, message);
+};
+
 export const runBridgeWorker = async (runDir: string): Promise<void> => {
-  while (true) {
-    const status = readBridgeRuntimeStatus(runDir);
-    const state = parseRunLifecycleState(status.state);
-    if (!(state && isActiveRunState(state))) {
-      return;
+  try {
+    while (true) {
+      const claimedPid = readBridgeWorkerPid(runDir);
+      if (claimedPid && claimedPid !== process.pid) {
+        return;
+      }
+      const status = readBridgeRuntimeStatus(runDir);
+      const state = parseRunLifecycleState(status.state);
+      if (!(state && isActiveRunState(state))) {
+        return;
+      }
+      if (status.tmuxSession && !status.hasLiveTmuxSession) {
+        clearStaleTmuxBridgeState(runDir);
+        return;
+      }
+      const delivered = status.hasLiveTmuxSession
+        ? await drainCodexTmuxMessages(runDir)
+        : await drainCodexAppServerMessages(runDir);
+      if (!(status.hasLiveTmuxSession || status.hasCodexRemote)) {
+        return;
+      }
+      await wait(
+        delivered ? BRIDGE_WORKER_SUCCESS_DELAY_MS : BRIDGE_WORKER_IDLE_DELAY_MS
+      );
     }
-    if (!status.tmuxSession) {
-      return;
-    }
-    if (!status.hasLiveTmuxSession) {
-      clearStaleTmuxBridgeState(runDir);
-      return;
-    }
-    const delivered = await drainCodexTmuxMessages(runDir);
-    await wait(delivered ? 100 : CODEX_TMUX_READY_DELAY_MS);
+  } finally {
+    clearBridgeWorkerPid(runDir, process.pid);
   }
 };

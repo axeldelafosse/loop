@@ -1384,6 +1384,118 @@ test("runBridgeWorker clears stale tmux routing and exits", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("ensureBridgeWorker launches one app-server worker per active run", async () => {
+  const bridge = await loadBridge();
+  const spawn = mock(() => ({
+    pid: process.pid,
+    unref: mock(() => undefined),
+  }));
+  bridge.bridgeRuntimeCommandDeps.spawn = spawn;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      state: "working",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.ensureBridgeWorker(runDir)).toBe(true);
+  expect(bridge.ensureBridgeWorker(runDir)).toBe(true);
+  expect(spawn).toHaveBeenCalledTimes(1);
+  expect(spawn.mock.calls[0]?.[0]).toEqual([
+    "/opt/bun",
+    "src/loop/main.ts",
+    bridge.BRIDGE_WORKER_SUBCOMMAND,
+    runDir,
+  ]);
+  expect(spawn.mock.calls[0]?.[1]).toMatchObject({
+    stderr: "ignore",
+    stdin: "ignore",
+    stdout: "ignore",
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("runBridgeWorker retries queued codex app-server messages", async () => {
+  let runDir = "";
+  const injectCodexMessage = mock(() => {
+    if (injectCodexMessage.mock.calls.length === 1) {
+      throw new Error("turn still active");
+    }
+    const manifestPath = join(runDir, "manifest.json");
+    const manifest = readRunManifest(manifestPath);
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        state: "completed",
+        status: "completed",
+      })}\n`,
+      "utf8"
+    );
+    return true;
+  });
+  const bridge = await loadBridge({ injectCodexMessage });
+  const root = makeTempDir();
+  runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      state: "working",
+      status: "running",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  bridge.bridgeInternals.appendBridgeEvent(runDir, {
+    at: "2026-03-23T10:01:00.000Z",
+    id: "msg-4",
+    kind: "message",
+    message: "Please review the final diff.",
+    source: "claude",
+    target: "codex",
+  });
+
+  await bridge.runBridgeWorker(runDir);
+
+  expect(injectCodexMessage).toHaveBeenCalledTimes(2);
+  expect(injectCodexMessage.mock.calls).toEqual([
+    ["ws://127.0.0.1:4500", "codex-thread-1", "Please review the final diff."],
+    ["ws://127.0.0.1:4500", "codex-thread-1", "Please review the final diff."],
+  ]);
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
+  expect(
+    bridge.bridgeInternals
+      .readBridgeEvents(runDir)
+      .filter((event) => event.kind === "delivered")
+  ).toHaveLength(1);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("bridge MCP delivers pending codex messages to Claude as channel notifications", async () => {
   const bridge = await loadBridge();
   const root = makeTempDir();

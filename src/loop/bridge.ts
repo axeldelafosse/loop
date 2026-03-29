@@ -11,6 +11,7 @@ import {
   clearStaleTmuxBridgeState,
   deliverCodexBridgeMessage,
   drainCodexTmuxMessages,
+  ensureBridgeWorker,
   flushClaudeChannelMessages,
   hasLiveCodexTmuxSession,
   readBridgeRuntimeStatus,
@@ -209,6 +210,13 @@ const handleSendToAgentTool = async (
       : undefined,
     target === "codex" ? () => hasLiveCodexTmuxSession(runDir) : undefined
   );
+  if (
+    result.status === "queued" &&
+    target === "codex" &&
+    ensureBridgeWorker(runDir)
+  ) {
+    result.status = "accepted";
+  }
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
@@ -534,5 +542,6 @@ export const bridgeInternals = {
   commandDeps: bridgeRuntimeCommandDeps,
   drainCodexTmuxMessages,
   deliverCodexBridgeMessage,
+  ensureBridgeWorker,
   readBridgeEvents,
 };
