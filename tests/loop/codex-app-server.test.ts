@@ -374,6 +374,15 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
     }
     if (request.method === "turn/start") {
       write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      queueMicrotask(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      });
     }
   };
 
@@ -396,13 +405,7 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
   expect(frames[0]?.params).toMatchObject({
     capabilities: {
       experimentalApi: true,
-      optOutNotificationMethods: [
-        "error",
-        "item/completed",
-        "item/agentMessage/delta",
-        "turn/completed",
-        "turn/started",
-      ],
+      optOutNotificationMethods: ["item/completed", "item/agentMessage/delta"],
     },
     clientInfo: {
       name: "loop-bridge",
@@ -419,6 +422,83 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
     ],
     threadId: "thread-1",
   });
+});
+
+test("injectCodexMessage waits for turn completion before resolving", async () => {
+  const appServer = await getModule();
+  let finishTurn: (() => void) | undefined;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      finishTurn = () => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      };
+    }
+  };
+
+  let resolved = false;
+  const pending = appServer
+    .injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+    .then((value) => {
+      resolved = true;
+      return value;
+    });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(resolved).toBe(false);
+
+  finishTurn?.();
+
+  await expect(pending).resolves.toBe(true);
+  expect(resolved).toBe(true);
+});
+
+test("injectCodexMessage rejects failed injected turns", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      queueMicrotask(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: {
+              error: { message: "policy blocked" },
+              id: "turn-1",
+              status: "failed",
+            },
+          },
+        });
+      });
+    }
+  };
+
+  await expect(
+    appServer.injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+  ).rejects.toThrow("policy blocked");
 });
 
 test("runCodexTurn promotes thread/start unsupported errors to fallback errors", async () => {
@@ -1110,6 +1190,15 @@ test("injectCodexMessage sends initialized and bridge notification opt-outs", as
     }
     if (request.method === "turn/start") {
       write({ id: request.id, result: { turn: { id: "turn-1" } } });
+      queueMicrotask(() => {
+        write({
+          method: "turn/completed",
+          params: {
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        });
+      });
     }
   };
 
@@ -1127,11 +1216,8 @@ test("injectCodexMessage sends initialized and bridge notification opt-outs", as
       capabilities: {
         experimentalApi: true,
         optOutNotificationMethods: [
-          "error",
           "item/completed",
           "item/agentMessage/delta",
-          "turn/completed",
-          "turn/started",
         ],
       },
     },

@@ -34,6 +34,12 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+interface PendingTurnCompletion {
+  reject: (error: Error) => void;
+  resolve: () => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 interface TurnState {
   combined: string;
   lastChunk: string;
@@ -62,7 +68,6 @@ const METHOD_INITIALIZE = "initialize";
 const METHOD_INITIALIZED = "initialized";
 const METHOD_THREAD_START = "thread/start";
 const METHOD_TURN_START = "turn/start";
-const METHOD_TURN_STARTED = "turn/started";
 const METHOD_TURN_COMPLETED = "turn/completed";
 const METHOD_ERROR = "error";
 const METHOD_ITEM_COMPLETED = "item/completed";
@@ -80,11 +85,8 @@ const METHODS_TRIGGERING_FALLBACK = new Set([
   METHOD_TURN_START,
 ]);
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS = [
-  METHOD_ERROR,
   METHOD_ITEM_COMPLETED,
   METHOD_ITEM_DELTA,
-  METHOD_TURN_COMPLETED,
-  METHOD_TURN_STARTED,
 ] as const;
 
 type SpawnFn = (...args: Parameters<typeof spawn>) => ReturnType<typeof spawn>;
@@ -313,17 +315,126 @@ const handleWsServerRequest = (
   });
 };
 
+const extractNotificationTurnId = (
+  params: Record<string, unknown>
+): string | undefined =>
+  extractTurnId(params) || asString(asRecord(params.turn).id);
+
+const settlePendingTurn = (
+  pendingTurns: Map<string, PendingTurnCompletion>,
+  turnId: string,
+  error?: Error
+): void => {
+  const turn = pendingTurns.get(turnId);
+  if (!turn) {
+    return;
+  }
+  clearTimeout(turn.timeout);
+  pendingTurns.delete(turnId);
+  if (error) {
+    turn.reject(error);
+    return;
+  }
+  turn.resolve();
+};
+
+const turnNotificationError = (
+  method: string,
+  turnId: string,
+  params: Record<string, unknown>
+): Error | undefined => {
+  if (method === METHOD_ERROR) {
+    return new Error(parseErrorText(params) || `turn ${turnId} failed`);
+  }
+  if (method !== METHOD_TURN_COMPLETED) {
+    return undefined;
+  }
+  const turn = asRecord(params.turn);
+  const status = asString(params.status) ?? asString(turn.status);
+  if (status !== "failed") {
+    return undefined;
+  }
+  return new Error(
+    parseErrorText(params) || parseErrorText(turn) || `turn ${turnId} failed`
+  );
+};
+
+const handleRemoteTurnNotification = (
+  pendingTurns: Map<string, PendingTurnCompletion>,
+  method: string,
+  params: Record<string, unknown>
+): void => {
+  const turnId = extractNotificationTurnId(params);
+  if (!turnId) {
+    return;
+  }
+  if (method !== METHOD_ERROR && method !== METHOD_TURN_COMPLETED) {
+    return;
+  }
+  settlePendingTurn(
+    pendingTurns,
+    turnId,
+    turnNotificationError(method, turnId, params)
+  );
+};
+
+const handleRemoteClientResponse = (
+  pending: Map<string, PendingRequest>,
+  requestId: string,
+  frame: JsonFrame
+): void => {
+  const request = pending.get(requestId);
+  if (!request) {
+    return;
+  }
+  clearTimeout(request.timeout);
+  pending.delete(requestId);
+  if (frame.error !== undefined) {
+    request.reject(
+      new Error(
+        parseErrorText(frame.error) ||
+          `codex app-server request "${request.method}" failed`
+      )
+    );
+    return;
+  }
+  request.resolve(frame.result);
+};
+
+const handleRemoteClientFrame = (
+  ws: import("./ws-client").WsClient,
+  pending: Map<string, PendingRequest>,
+  pendingTurns: Map<string, PendingTurnCompletion>,
+  frame: JsonFrame
+): void => {
+  const frameId = asRequestId(frame.id);
+  const method = asString(frame.method);
+  if (frameId && method) {
+    handleWsServerRequest(ws, frameId, method);
+    return;
+  }
+  if (frameId) {
+    handleRemoteClientResponse(pending, frameId, frame);
+    return;
+  }
+  if (method) {
+    handleRemoteTurnNotification(pendingTurns, method, asRecord(frame.params));
+  }
+};
+
 const createRemoteAppServerClient = async (
   url: string
 ): Promise<{
   close(): void;
   sendNotification(method: string, params?: Record<string, unknown>): void;
   sendRequest(method: string, params: unknown): Promise<unknown>;
+  waitForTurnCompletion(turnId: string): Promise<void>;
 }> => {
   const ws = await connectWsFn(url);
   let closed = false;
   let requestId = 1;
   const pending = new Map<string, PendingRequest>();
+  const pendingTurns = new Map<string, PendingTurnCompletion>();
 
   const failAll = (error: Error): void => {
     for (const request of pending.values()) {
@@ -331,6 +442,11 @@ const createRemoteAppServerClient = async (
       request.reject(error);
     }
     pending.clear();
+    for (const turn of pendingTurns.values()) {
+      clearTimeout(turn.timeout);
+      turn.reject(error);
+    }
+    pendingTurns.clear();
   };
 
   ws.onmessage = (data) => {
@@ -339,31 +455,7 @@ const createRemoteAppServerClient = async (
       if (!frame) {
         continue;
       }
-      const frameId = asRequestId(frame.id);
-      const method = asString(frame.method);
-      if (frameId && method) {
-        handleWsServerRequest(ws, frameId, method);
-        continue;
-      }
-      if (!frameId) {
-        continue;
-      }
-      const request = pending.get(frameId);
-      if (!request) {
-        continue;
-      }
-      clearTimeout(request.timeout);
-      pending.delete(frameId);
-      if (frame.error !== undefined) {
-        request.reject(
-          new Error(
-            parseErrorText(frame.error) ||
-              `codex app-server request "${request.method}" failed`
-          )
-        );
-        continue;
-      }
-      request.resolve(frame.result);
+      handleRemoteClientFrame(ws, pending, pendingTurns, frame);
     }
   };
 
@@ -415,6 +507,20 @@ const createRemoteAppServerClient = async (
           reject(new Error(`codex app-server request "${method}" timed out`));
         }, AGENT_TURN_TIMEOUT_MS);
         pending.set(nextRequestId, { method, reject, resolve, timeout });
+      });
+    },
+    waitForTurnCompletion: (turnId: string): Promise<void> => {
+      if (closed) {
+        return Promise.reject(
+          new Error("codex app-server remote connection closed")
+        );
+      }
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          pendingTurns.delete(turnId);
+          reject(new Error(`codex app-server turn ${turnId} timed out`));
+        }, AGENT_TURN_TIMEOUT_MS);
+        pendingTurns.set(turnId, { reject, resolve, timeout });
       });
     },
   };
@@ -1280,10 +1386,15 @@ export const injectCodexMessage = async (
       },
     });
     client.sendNotification(METHOD_INITIALIZED);
-    await client.sendRequest(METHOD_TURN_START, {
+    const response = await client.sendRequest(METHOD_TURN_START, {
       input: buildInput(prompt),
       threadId,
     });
+    const turn = extractTurnFromStart(response);
+    if (!turn.id) {
+      throw new Error("codex app-server returned turn/start without turn id");
+    }
+    await client.waitForTurnCompletion(turn.id);
     return true;
   } finally {
     client.close();
