@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { codexTmuxProxyInternals } from "../../src/loop/codex-tmux-proxy";
+import {
+  createRunManifest,
+  readRunManifest,
+  writeRunManifest,
+} from "../../src/loop/run-state";
 
 const bridgeMessage = {
   at: "2026-03-29T00:00:00.000Z",
@@ -9,6 +17,8 @@ const bridgeMessage = {
   source: "claude" as const,
   target: "codex" as const,
 };
+
+const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-proxy-"));
 
 test("codex tmux proxy waits briefly for the tmux session to appear", () => {
   const now = Date.now();
@@ -133,4 +143,31 @@ test("codex tmux proxy only pauses bridge drain when it cannot steer", () => {
   expect(
     codexTmuxProxyInternals.shouldPauseBridgeDrain(false, undefined, 1)
   ).toBe(true);
+});
+
+test("codex tmux proxy persists newer live thread ids to the run manifest", () => {
+  const root = makeTempDir();
+  const manifestPath = join(root, "manifest.json");
+  writeRunManifest(
+    manifestPath,
+    createRunManifest({
+      claudeSessionId: "claude-1",
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-startup",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "7",
+      tmuxSession: "loop-loop-7",
+    })
+  );
+
+  codexTmuxProxyInternals.persistCodexThreadId(root, "codex-thread-live");
+
+  expect(readRunManifest(manifestPath)?.codexThreadId).toBe(
+    "codex-thread-live"
+  );
+
+  rmSync(root, { recursive: true, force: true });
 });

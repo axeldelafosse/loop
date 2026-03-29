@@ -8,7 +8,12 @@ import {
 import { clearStaleTmuxBridgeState } from "./bridge-runtime";
 import type { BridgeMessage } from "./bridge-store";
 import { findFreePort } from "./ports";
-import { isActiveRunState, readRunManifest } from "./run-state";
+import {
+  isActiveRunState,
+  readRunManifest,
+  touchRunManifest,
+  updateRunManifest,
+} from "./run-state";
 import { connectWs, type WsClient } from "./ws-client";
 
 const CODEX_PROXY_BASE_PORT = 4600;
@@ -135,6 +140,24 @@ const shouldPauseBridgeDrain = (
     return true;
   }
   return turnInProgress && !activeTurnId;
+};
+
+const persistCodexThreadId = (runDir: string, threadId: string): void => {
+  if (!threadId) {
+    return;
+  }
+  updateRunManifest(join(runDir, "manifest.json"), (manifest) => {
+    if (!manifest || manifest.codexThreadId === threadId) {
+      return manifest;
+    }
+    return touchRunManifest(
+      {
+        ...manifest,
+        codexThreadId: threadId,
+      },
+      new Date().toISOString()
+    );
+  });
 };
 
 const buildBridgeInjectionFrame = (
@@ -339,6 +362,14 @@ class CodexTmuxProxy {
     this.upstream?.send(`${JSON.stringify(frame)}\n`);
   }
 
+  private rememberThreadId(threadId: string | undefined): void {
+    if (!threadId || threadId === this.threadId) {
+      return;
+    }
+    this.threadId = threadId;
+    persistCodexThreadId(this.runDir, threadId);
+  }
+
   private handleTuiFrame(raw: string): void {
     const frame = asJsonFrame(raw);
     if (!(frame?.method && frame.id !== undefined)) {
@@ -434,13 +465,14 @@ class CodexTmuxProxy {
       (route.method === THREAD_START_METHOD ||
         route.method === THREAD_RESUME_METHOD)
     ) {
-      this.threadId =
-        extractThreadId(frame.result) ?? route.threadId ?? this.threadId;
+      this.rememberThreadId(
+        extractThreadId(frame.result) ?? route.threadId ?? this.threadId
+      );
       return;
     }
 
     if (!frame.error && route.method === TURN_START_METHOD) {
-      this.threadId = route.threadId ?? this.threadId;
+      this.rememberThreadId(route.threadId ?? this.threadId);
       noteStartedTurn(this.activeTurnIds, frame.result);
       this.turnInProgress = true;
     }
@@ -599,6 +631,7 @@ export const codexTmuxProxyInternals = {
   buildProxyUrl,
   noteStartedTurn,
   patchInitializeError,
+  persistCodexThreadId,
   shouldPauseBridgeDrain,
   shouldStopForTmuxSession,
 };
