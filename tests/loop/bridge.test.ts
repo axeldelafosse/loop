@@ -1424,6 +1424,52 @@ test("bridge stale tmux cleanup logs thrown Claude MCP remove errors", async () 
   }
 });
 
+test("bridge stale tmux cleanup removes a persisted Claude server name", async () => {
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "claude" && args[1] === "mcp" && args[2] === "remove") {
+      return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+    }
+    return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge();
+  bridge.bridgeRuntimeCommandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      claudeChannelServer: "loop-bridge-custom-8",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+
+  expect(bridge.clearStaleTmuxBridgeState(runDir)).toBe(true);
+  expect(
+    spawnSync.mock.calls.filter(
+      (call) => call[0]?.[0] === "claude" && call[0]?.[2] === "remove"
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      [
+        ["claude", "mcp", "remove", "--scope", "local", "loop-bridge-custom-8"],
+        expect.objectContaining({ stderr: "pipe", stdout: "ignore" }),
+      ],
+    ])
+  );
+
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("runBridgeWorker clears stale tmux routing and exits", async () => {
   const spawnSync = mock((args: string[]) => {
     if (args[0] === "tmux" && args[1] === "has-session") {
@@ -1480,6 +1526,78 @@ test("runBridgeWorker clears stale tmux routing and exits", async () => {
       ],
     ])
   );
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("runBridgeWorker falls back to app-server delivery after stale tmux cleanup", async () => {
+  let runDir = "";
+  const injectCodexMessage = mock(() => {
+    const manifestPath = join(runDir, "manifest.json");
+    const manifest = readRunManifest(manifestPath);
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        state: "completed",
+        status: "completed",
+      })}\n`,
+      "utf8"
+    );
+    return true;
+  });
+  const spawnSync = mock((args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      return { exitCode: 1, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+    }
+    if (args[0] === "claude" && args[1] === "mcp" && args[2] === "remove") {
+      return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+    }
+    return { exitCode: 0, stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) };
+  });
+  const bridge = await loadBridge({ injectCodexMessage });
+  bridge.bridgeRuntimeCommandDeps.spawnSync = spawnSync;
+  const root = makeTempDir();
+  runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "manifest.json"),
+    `${JSON.stringify({
+      codexRemoteUrl: "ws://127.0.0.1:4500",
+      codexThreadId: "codex-thread-1",
+      createdAt: "2026-03-23T10:00:00.000Z",
+      cwd: "/repo",
+      mode: "paired",
+      pid: 1234,
+      repoId: "repo-123",
+      runId: "8",
+      state: "working",
+      status: "running",
+      tmuxSession: "repo-loop-8",
+      updatedAt: "2026-03-23T10:00:00.000Z",
+    })}\n`,
+    "utf8"
+  );
+  bridge.bridgeInternals.appendBridgeEvent(runDir, {
+    at: "2026-03-23T10:01:00.000Z",
+    id: "msg-stale-fallback",
+    kind: "message",
+    message: "Please deliver this after tmux cleanup.",
+    source: "claude",
+    target: "codex",
+  });
+
+  await bridge.runBridgeWorker(runDir);
+
+  expect(injectCodexMessage).toHaveBeenCalledWith(
+    "ws://127.0.0.1:4500",
+    "codex-thread-1",
+    "Claude: Please deliver this after tmux cleanup."
+  );
+  expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
+    undefined
+  );
+  expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
 
   rmSync(root, { recursive: true, force: true });
 });

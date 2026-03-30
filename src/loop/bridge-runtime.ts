@@ -257,9 +257,10 @@ export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
       return manifest;
     }
     removedServerNames = [
+      manifest.claudeChannelServer,
       claudeChannelServerName(manifest.runId, manifest.repoId),
       legacyClaudeChannelServerName(manifest.runId),
-    ];
+    ].filter((name): name is string => Boolean(name));
     return touchRunManifest(
       {
         ...manifest,
@@ -387,6 +388,17 @@ export const drainCodexAppServerMessages = (
   return deliverCodexBridgeMessage(runDir, message);
 };
 
+const clearStaleTmuxWorkerState = (
+  runDir: string,
+  status: BridgeRuntimeStatus
+): boolean => {
+  if (!(status.tmuxSession && !status.hasLiveTmuxSession)) {
+    return true;
+  }
+  clearStaleTmuxBridgeState(runDir);
+  return status.hasCodexRemote;
+};
+
 export const runBridgeWorker = async (runDir: string): Promise<void> => {
   try {
     while (true) {
@@ -399,8 +411,7 @@ export const runBridgeWorker = async (runDir: string): Promise<void> => {
       if (!(state && isActiveRunState(state))) {
         return;
       }
-      if (status.tmuxSession && !status.hasLiveTmuxSession) {
-        clearStaleTmuxBridgeState(runDir);
+      if (!clearStaleTmuxWorkerState(runDir, status)) {
         return;
       }
       const delivered = status.hasCodexRemote
