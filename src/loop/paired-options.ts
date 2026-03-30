@@ -1,7 +1,8 @@
 import {
   buildCodexBridgeConfigArgs,
-  claudeChannelServerName,
   ensureClaudeBridgeConfig,
+  claudeChannelServerName,
+  resolveClaudeChannelServerName,
 } from "./bridge-config";
 import {
   createRunManifest,
@@ -43,12 +44,12 @@ export const canResumePairedManifest = (manifest?: RunManifest): boolean => {
 const resolveClaudeBridgeServer = (
   storage: RunStorage,
   manifest?: RunManifest
-): string => {
-  return (
-    manifest?.claudeChannelServer ??
-    claudeChannelServerName(storage.runId, storage.repoId)
+): string =>
+  resolveClaudeChannelServerName(
+    storage.runId,
+    storage.repoId,
+    manifest?.claudeChannelServer
   );
-};
 
 const resolveRequestedRunState = (
   opts: Options,

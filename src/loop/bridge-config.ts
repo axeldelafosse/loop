@@ -11,6 +11,7 @@ const CODEX_AUTO_APPROVED_BRIDGE_TOOLS = [
   "receive_messages",
 ] as const;
 const CODEX_BRIDGE_APPROVAL_MODE = "approve";
+const REPO_ID_HASH_SUFFIX_RE = /-[0-9a-f]{12}$/;
 
 const ensureParentDir = (path: string): void => {
   mkdirSync(dirname(path), { recursive: true });
@@ -49,13 +50,59 @@ const buildBridgeFileConfig = (
 export const legacyClaudeChannelServerName = (runId: string): string =>
   `${BRIDGE_SERVER}-${sanitizeBase(runId)}`;
 
+const readableRepoSegment = (repoId?: string): string | undefined => {
+  const value = repoId?.trim();
+  if (!value) {
+    return undefined;
+  }
+  return sanitizeBase(value.replace(REPO_ID_HASH_SUFFIX_RE, ""));
+};
+
+export const legacyRepoScopedClaudeChannelServerName = (
+  runId: string,
+  repoId: string
+): string => `${BRIDGE_SERVER}-${sanitizeBase(repoId)}-${sanitizeBase(runId)}`;
+
 export const claudeChannelServerName = (
   runId: string,
   repoId?: string
-): string =>
-  repoId?.trim()
-    ? `${BRIDGE_SERVER}-${sanitizeBase(repoId)}-${sanitizeBase(runId)}`
+): string => {
+  const repoSegment = readableRepoSegment(repoId);
+  return repoSegment
+    ? `${BRIDGE_SERVER}-${repoSegment}-${sanitizeBase(runId)}`
     : legacyClaudeChannelServerName(runId);
+};
+
+export const generatedClaudeChannelServerNames = (
+  runId: string,
+  repoId?: string
+): string[] => {
+  const names = [legacyClaudeChannelServerName(runId)];
+  if (!repoId?.trim()) {
+    return names;
+  }
+  return Array.from(
+    new Set([
+      claudeChannelServerName(runId, repoId),
+      legacyRepoScopedClaudeChannelServerName(runId, repoId),
+      ...names,
+    ])
+  );
+};
+
+export const resolveClaudeChannelServerName = (
+  runId: string,
+  repoId: string | undefined,
+  storedName?: string
+): string => {
+  const nextServer = claudeChannelServerName(runId, repoId);
+  if (!storedName?.trim()) {
+    return nextServer;
+  }
+  return generatedClaudeChannelServerNames(runId, repoId).includes(storedName)
+    ? nextServer
+    : storedName;
+};
 
 export const buildClaudeChannelServerConfig = (
   launchArgv: string[],
