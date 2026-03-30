@@ -10,6 +10,7 @@ import {
   buildClaudeChannelServerConfig,
   claudeChannelServerName,
   legacyClaudeChannelServerName,
+  resolveClaudeChannelServerName,
 } from "./bridge-config";
 import {
   receiveMessagesStuckGuidance,
@@ -841,9 +842,11 @@ const startPairedSession = async (
     codexRemoteUrl,
     codexThreadId
   );
-  const claudeChannelServer =
-    manifest.claudeChannelServer ||
-    claudeChannelServerName(storage.runId, storage.repoId);
+  const claudeChannelServer = resolveClaudeChannelServerName(
+    storage.runId,
+    storage.repoId,
+    manifest.claudeChannelServer
+  );
   registerClaudeChannelServerForRun(deps, claudeChannelServer, storage.runDir);
   try {
     const env = [

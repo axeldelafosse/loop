@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { claudeChannelServerName } from "./bridge-config";
+import { resolveClaudeChannelServerName } from "./bridge-config";
 import { BRIDGE_SERVER } from "./bridge-constants";
 import { normalizeBridgeMessage } from "./bridge-message-format";
 import {
@@ -242,11 +242,13 @@ export const readBridgeStatus = (runDir: string): BridgeStatus => {
   return {
     bridgeServer: BRIDGE_SERVER,
     claudeBridgeMode: hasTmuxSession ? "local-registration" : "mcp-config",
-    claudeChannelServer:
-      manifest?.claudeChannelServer ??
-      (runId
-        ? claudeChannelServerName(runId, manifest?.repoId)
-        : BRIDGE_SERVER),
+    claudeChannelServer: runId
+      ? resolveClaudeChannelServerName(
+          runId,
+          manifest?.repoId,
+          manifest?.claudeChannelServer
+        )
+      : BRIDGE_SERVER,
     claudeSessionId: manifest?.claudeSessionId ?? "",
     codexRemoteUrl,
     codexThreadId,

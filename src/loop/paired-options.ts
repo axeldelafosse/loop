@@ -1,7 +1,7 @@
 import {
   buildCodexBridgeConfigArgs,
-  ensureClaudeBridgeConfig,
   claudeChannelServerName,
+  ensureClaudeBridgeConfig,
   resolveClaudeChannelServerName,
 } from "./bridge-config";
 import {

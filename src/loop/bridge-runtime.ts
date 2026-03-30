@@ -2,10 +2,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, spawnSync } from "bun";
 import { removeClaudeChannelServer } from "./bridge-claude-registration";
-import {
-  claudeChannelServerName,
-  legacyClaudeChannelServerName,
-} from "./bridge-config";
+import { generatedClaudeChannelServerNames } from "./bridge-config";
 import {
   BRIDGE_WORKER_SUBCOMMAND,
   CLAUDE_CHANNEL_USER,
@@ -258,8 +255,7 @@ export const clearStaleTmuxBridgeState = (runDir: string): boolean => {
     }
     removedServerNames = [
       manifest.claudeChannelServer,
-      claudeChannelServerName(manifest.runId, manifest.repoId),
-      legacyClaudeChannelServerName(manifest.runId),
+      ...generatedClaudeChannelServerNames(manifest.runId, manifest.repoId),
     ].filter((name): name is string => Boolean(name));
     return touchRunManifest(
       {
