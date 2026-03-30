@@ -372,6 +372,10 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
       write({ id: request.id, result: {} });
       return;
     }
+    if (request.method === "thread/read") {
+      write({ id: request.id, result: { thread: { turns: [] } } });
+      return;
+    }
     if (request.method === "turn/start") {
       write({ id: request.id, result: { turn: { id: "turn-1" } } });
     }
@@ -391,18 +395,13 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
   expect(frames.map((frame) => frame.method)).toEqual([
     "initialize",
     "initialized",
+    "thread/read",
     "turn/start",
   ]);
   expect(frames[0]?.params).toMatchObject({
     capabilities: {
       experimentalApi: true,
-      optOutNotificationMethods: [
-        "error",
-        "item/completed",
-        "item/agentMessage/delta",
-        "turn/completed",
-        "turn/started",
-      ],
+      optOutNotificationMethods: ["item/completed", "item/agentMessage/delta"],
     },
     clientInfo: {
       name: "loop-bridge",
@@ -410,6 +409,10 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
     },
   });
   expect(frames[2]?.params).toMatchObject({
+    includeTurns: true,
+    threadId: "thread-1",
+  });
+  expect(frames[3]?.params).toMatchObject({
     input: [
       {
         text: "Please review the latest diff.",
@@ -419,6 +422,157 @@ test("injectCodexMessage sends the bridge handshake and notification opt-outs", 
     ],
     threadId: "thread-1",
   });
+});
+
+test("injectCodexMessage steers an active turn instead of starting a new turn", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/read") {
+      write({
+        id: request.id,
+        result: {
+          thread: {
+            turns: [{ id: "turn-active", status: "inProgress" }],
+          },
+        },
+      });
+      return;
+    }
+    if (request.method === "turn/steer") {
+      write({ id: request.id, result: { turnId: "turn-active" } });
+    }
+  };
+
+  await expect(
+    appServer.injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+  ).resolves.toBe(true);
+  const frames = wsWrites.map((line) => JSON.parse(line) as RequestFrame);
+  expect(frames.map((frame) => frame.method)).toEqual([
+    "initialize",
+    "initialized",
+    "thread/read",
+    "turn/steer",
+  ]);
+  expect(frames[3]?.params).toMatchObject({
+    expectedTurnId: "turn-active",
+    threadId: "thread-1",
+  });
+});
+
+test("injectCodexMessage returns once turn/start is accepted", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/read") {
+      write({ id: request.id, result: { thread: { turns: [] } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, result: { turn: { id: "turn-1" } } });
+    }
+  };
+
+  let resolved = false;
+  const pending = appServer
+    .injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+    .then((value) => {
+      resolved = true;
+      return value;
+    });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(resolved).toBe(true);
+  await expect(pending).resolves.toBe(true);
+});
+
+test("injectCodexMessage retries a busy turn/start with turn/steer", async () => {
+  const appServer = await getModule();
+  let threadReadCount = 0;
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/read") {
+      threadReadCount += 1;
+      write({
+        id: request.id,
+        result: {
+          thread: {
+            turns:
+              threadReadCount === 1
+                ? []
+                : [{ id: "turn-active", status: "inProgress" }],
+          },
+        },
+      });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, error: { message: "turn still active" } });
+      return;
+    }
+    if (request.method === "turn/steer") {
+      write({ id: request.id, result: { turnId: "turn-active" } });
+    }
+  };
+
+  await expect(
+    appServer.injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+  ).resolves.toBe(true);
+  const frames = wsWrites.map((line) => JSON.parse(line) as RequestFrame);
+  expect(frames.map((frame) => frame.method)).toEqual([
+    "initialize",
+    "initialized",
+    "thread/read",
+    "turn/start",
+    "thread/read",
+    "turn/steer",
+  ]);
+});
+
+test("injectCodexMessage rejects failed turn/start requests", async () => {
+  const appServer = await getModule();
+  currentHandler = (request, write) => {
+    if (request.method === "initialize") {
+      write({ id: request.id, result: {} });
+      return;
+    }
+    if (request.method === "thread/read") {
+      write({ id: request.id, result: { thread: { turns: [] } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      write({ id: request.id, error: { message: "policy blocked" } });
+    }
+  };
+
+  await expect(
+    appServer.injectCodexMessage(
+      "ws://127.0.0.1:4500",
+      "thread-1",
+      "Please review the final diff."
+    )
+  ).rejects.toThrow("policy blocked");
 });
 
 test("runCodexTurn promotes thread/start unsupported errors to fallback errors", async () => {
@@ -1108,6 +1262,10 @@ test("injectCodexMessage sends initialized and bridge notification opt-outs", as
       write({ id: request.id, result: {} });
       return;
     }
+    if (request.method === "thread/read") {
+      write({ id: request.id, result: { thread: { turns: [] } } });
+      return;
+    }
     if (request.method === "turn/start") {
       write({ id: request.id, result: { turn: { id: "turn-1" } } });
     }
@@ -1127,11 +1285,8 @@ test("injectCodexMessage sends initialized and bridge notification opt-outs", as
       capabilities: {
         experimentalApi: true,
         optOutNotificationMethods: [
-          "error",
           "item/completed",
           "item/agentMessage/delta",
-          "turn/completed",
-          "turn/started",
         ],
       },
     },
@@ -1141,6 +1296,13 @@ test("injectCodexMessage sends initialized and bridge notification opt-outs", as
     method: "initialized",
   });
   expect(frames[2]).toMatchObject({
+    method: "thread/read",
+    params: {
+      includeTurns: true,
+      threadId: "thread-1",
+    },
+  });
+  expect(frames[3]).toMatchObject({
     method: "turn/start",
     params: {
       threadId: "thread-1",

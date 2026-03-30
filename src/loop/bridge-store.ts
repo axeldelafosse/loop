@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveClaudeChannelServerName } from "./bridge-config";
+import { BRIDGE_SERVER } from "./bridge-constants";
+import { normalizeBridgeMessage } from "./bridge-message-format";
 import {
   appendRunTranscriptEntry,
   buildTranscriptPath,
@@ -11,8 +14,6 @@ import type { Agent } from "./types";
 const BRIDGE_FILE = "bridge.jsonl";
 const LINE_SPLIT_RE = /\r?\n/;
 const MAX_STATUS_MESSAGES = 100;
-const BRIDGE_PREFIX_RE =
-  /^Message from (Claude|Codex) via the loop bridge:\s*/i;
 
 interface BridgeBaseEvent {
   at: string;
@@ -36,9 +37,14 @@ interface BridgeAck extends BridgeBaseEvent {
 export type BridgeEvent = BridgeAck | BridgeMessage;
 
 export interface BridgeStatus {
+  bridgeServer: string;
+  claudeBridgeMode: "local-registration" | "mcp-config";
+  claudeChannelServer: string;
   claudeSessionId: string;
   codexRemoteUrl: string;
   codexThreadId: string;
+  hasCodexRemote: boolean;
+  hasTmuxSession: boolean;
   pending: { claude: number; codex: number };
   runId: string;
   state: string;
@@ -58,9 +64,6 @@ export const normalizeAgent = (value: unknown): Agent | undefined => {
   }
   return undefined;
 };
-
-const normalizeBridgeMessage = (message: string): string =>
-  message.trim().replace(BRIDGE_PREFIX_RE, "").replace(/\s+/g, " ");
 
 const orderedBridgePairKey = (source: Agent, target: Agent): string =>
   `${source}>${target}`;
@@ -231,15 +234,31 @@ const countPendingMessages = (runDir: string): BridgeStatus["pending"] => {
 
 export const readBridgeStatus = (runDir: string): BridgeStatus => {
   const manifest = readRunManifest(join(runDir, "manifest.json"));
+  const runId = manifest?.runId ?? "";
+  const codexRemoteUrl = manifest?.codexRemoteUrl ?? "";
+  const codexThreadId = manifest?.codexThreadId ?? "";
+  const tmuxSession = manifest?.tmuxSession ?? "";
+  const hasTmuxSession = Boolean(tmuxSession);
   return {
+    bridgeServer: BRIDGE_SERVER,
+    claudeBridgeMode: hasTmuxSession ? "local-registration" : "mcp-config",
+    claudeChannelServer: runId
+      ? resolveClaudeChannelServerName(
+          runId,
+          manifest?.repoId,
+          manifest?.claudeChannelServer
+        )
+      : BRIDGE_SERVER,
     claudeSessionId: manifest?.claudeSessionId ?? "",
-    codexRemoteUrl: manifest?.codexRemoteUrl ?? "",
-    codexThreadId: manifest?.codexThreadId ?? "",
+    codexRemoteUrl,
+    codexThreadId,
+    hasCodexRemote: Boolean(codexRemoteUrl && codexThreadId),
+    hasTmuxSession,
     pending: countPendingMessages(runDir),
-    runId: manifest?.runId ?? "",
+    runId,
     state: manifest?.state ?? "unknown",
     status: manifest?.status ?? "unknown",
-    tmuxSession: manifest?.tmuxSession ?? "",
+    tmuxSession,
   };
 };
 

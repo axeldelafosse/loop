@@ -54,6 +54,7 @@ export interface RunStorage {
 }
 
 export interface RunManifest {
+  claudeChannelServer?: string;
   claudeSessionId: string;
   codexRemoteUrl?: string;
   codexThreadId: string;
@@ -122,6 +123,7 @@ interface RepoIdDeps {
 }
 
 interface RunManifestInput {
+  claudeChannelServer?: string;
   claudeSessionId?: string;
   codexRemoteUrl?: string;
   codexThreadId?: string;
@@ -444,6 +446,9 @@ export const createRunManifest = (
     parseRunLifecycleState(undefined, input.status) ??
     "submitted";
   return {
+    ...(input.claudeChannelServer
+      ? { claudeChannelServer: input.claudeChannelServer }
+      : {}),
     claudeSessionId: input.claudeSessionId ?? "",
     ...(input.codexRemoteUrl ? { codexRemoteUrl: input.codexRemoteUrl } : {}),
     codexThreadId: input.codexThreadId ?? "",
@@ -524,6 +529,14 @@ export const readRunManifest = (
     }
 
     return {
+      ...(firstString(parsed, ["claudeChannelServer", "claude_channel_server"])
+        ? {
+            claudeChannelServer: firstString(parsed, [
+              "claudeChannelServer",
+              "claude_channel_server",
+            ]),
+          }
+        : {}),
       claudeSessionId:
         firstString(parsed, ["claudeSessionId", "claude_session_id"]) ?? "",
       ...(firstString(parsed, ["codexRemoteUrl", "codex_remote_url"])

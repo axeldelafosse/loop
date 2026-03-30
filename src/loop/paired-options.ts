@@ -1,6 +1,8 @@
 import {
   buildCodexBridgeConfigArgs,
+  claudeChannelServerName,
   ensureClaudeBridgeConfig,
+  resolveClaudeChannelServerName,
 } from "./bridge-config";
 import {
   createRunManifest,
@@ -38,6 +40,16 @@ interface RequestedRunState {
 export const canResumePairedManifest = (manifest?: RunManifest): boolean => {
   return manifest ? isActiveRunState(manifest.state) : false;
 };
+
+const resolveClaudeBridgeServer = (
+  storage: RunStorage,
+  manifest?: RunManifest
+): string =>
+  resolveClaudeChannelServerName(
+    storage.runId,
+    storage.repoId,
+    manifest?.claudeChannelServer
+  );
 
 const resolveRequestedRunState = (
   opts: Options,
@@ -116,6 +128,7 @@ export const resolvePreparedRunState = (
   }
 
   const manifest = createRunManifest({
+    claudeChannelServer: claudeChannelServerName(storage.runId, storage.repoId),
     claudeSessionId: "",
     codexThreadId: "",
     cwd,
@@ -139,7 +152,11 @@ export const applyPairedOptions = (
   manifest: RunManifest | undefined,
   allowRawSessionFallback = false
 ): void => {
-  opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(storage.runDir, "claude");
+  opts.claudeMcpConfigPath = ensureClaudeBridgeConfig(
+    storage.runDir,
+    "claude",
+    resolveClaudeBridgeServer(storage, manifest)
+  );
   opts.claudePersistentSession = true;
   opts.codexMcpConfigArgs = buildCodexBridgeConfigArgs(storage.runDir, "codex");
   opts.pairedMode = true;
@@ -176,6 +193,7 @@ export const preparePairedRun = (
     ? touchRunManifest(
         {
           ...existing,
+          claudeChannelServer: resolveClaudeBridgeServer(storage, existing),
           claudeSessionId:
             resumable?.claudeSessionId || opts.pairedSessionIds?.claude || "",
           codexThreadId:
@@ -190,6 +208,10 @@ export const preparePairedRun = (
         new Date().toISOString()
       )
     : createRunManifest({
+        claudeChannelServer: claudeChannelServerName(
+          storage.runId,
+          storage.repoId
+        ),
         claudeSessionId: opts.pairedSessionIds?.claude ?? "",
         codexThreadId: opts.pairedSessionIds?.codex ?? "",
         cwd,

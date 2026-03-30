@@ -1,19 +1,20 @@
+import { claudeChannelServerName } from "./bridge-config";
 import { BRIDGE_SERVER as BRIDGE_SERVER_VALUE } from "./bridge-constants";
 import {
   consumeBridgeInbox,
   dispatchBridgeMessage,
   formatDispatchResult,
-  isActiveBridgeChatId,
 } from "./bridge-dispatch";
 import { claudeChannelInstructions } from "./bridge-guidance";
 import {
   bridgeRuntimeCommandDeps,
-  claudeChannelServerName,
   clearStaleTmuxBridgeState,
   deliverCodexBridgeMessage,
   drainCodexTmuxMessages,
+  ensureBridgeWorker,
   flushClaudeChannelMessages,
   hasLiveCodexTmuxSession,
+  readBridgeRuntimeStatus,
 } from "./bridge-runtime";
 import {
   appendBlockedBridgeMessage,
@@ -23,7 +24,6 @@ import {
   formatBridgeInbox,
   normalizeAgent,
   readBridgeEvents,
-  readBridgeStatus,
 } from "./bridge-store";
 import { LOOP_VERSION } from "./constants";
 import type { Agent } from "./types";
@@ -117,7 +117,9 @@ const handleBridgeStatusTool = (
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
-    result: toolContent(JSON.stringify(readBridgeStatus(runDir), null, 2)),
+    result: toolContent(
+      JSON.stringify(readBridgeRuntimeStatus(runDir), null, 2)
+    ),
   });
 };
 
@@ -137,45 +139,6 @@ const handleReceiveMessagesTool = (
     result: toolContent(
       messages.length === 0 ? "[]" : formatBridgeInbox(messages)
     ),
-  });
-};
-
-const handleReplyTool = async (
-  id: JsonRpcRequest["id"],
-  runDir: string,
-  source: Agent,
-  args: Record<string, unknown>
-): Promise<void> => {
-  const chatId = asString(args.chat_id);
-  const text = asString(args.text);
-  if (!chatId) {
-    writeError(id, MCP_INVALID_PARAMS, "reply requires a chat_id");
-    return;
-  }
-  if (!isActiveBridgeChatId(runDir, chatId)) {
-    writeError(
-      id,
-      MCP_INVALID_PARAMS,
-      "reply chat_id does not match the active bridge conversation"
-    );
-    return;
-  }
-  if (!text) {
-    writeError(id, MCP_INVALID_PARAMS, "reply requires a non-empty text");
-    return;
-  }
-  const result = await dispatchBridgeMessage(
-    runDir,
-    source,
-    "codex",
-    text,
-    (entry) => deliverCodexBridgeMessage(runDir, entry),
-    () => hasLiveCodexTmuxSession(runDir)
-  );
-  writeJsonRpc({
-    id,
-    jsonrpc: "2.0",
-    result: toolContent(formatDispatchResult(result)),
   });
 };
 
@@ -247,6 +210,13 @@ const handleSendToAgentTool = async (
       : undefined,
     target === "codex" ? () => hasLiveCodexTmuxSession(runDir) : undefined
   );
+  if (
+    result.status === "queued" &&
+    target === "codex" &&
+    ensureBridgeWorker(runDir)
+  ) {
+    result.status = "accepted";
+  }
   writeJsonRpc({
     id,
     jsonrpc: "2.0",
@@ -271,11 +241,6 @@ const handleToolCall = async (
 
   if (name === "receive_messages") {
     handleReceiveMessagesTool(id, runDir, source);
-    return;
-  }
-
-  if (source === "claude" && name === "reply") {
-    await handleReplyTool(id, runDir, source, args);
     return;
   }
 
@@ -345,25 +310,6 @@ const handleBridgeRequest = async (
         jsonrpc: "2.0",
         result: {
           tools: [
-            ...(source === "claude"
-              ? [
-                  {
-                    annotations: MUTATING_TOOL_ANNOTATIONS,
-                    description:
-                      "Reply to the active Codex channel conversation and deliver the response back to Codex.",
-                    inputSchema: {
-                      additionalProperties: false,
-                      properties: {
-                        chat_id: { type: "string" },
-                        text: { type: "string" },
-                      },
-                      required: ["chat_id", "text"],
-                      type: "object",
-                    },
-                    name: "reply",
-                  },
-                ]
-              : []),
             {
               annotations: MUTATING_TOOL_ANNOTATIONS,
               description: "Send an explicit message to the paired agent.",
@@ -596,5 +542,6 @@ export const bridgeInternals = {
   commandDeps: bridgeRuntimeCommandDeps,
   drainCodexTmuxMessages,
   deliverCodexBridgeMessage,
+  ensureBridgeWorker,
   readBridgeEvents,
 };
