@@ -3,6 +3,7 @@ import {
   acknowledgeBridgeDelivery,
   readNextPendingBridgeMessage,
 } from "./bridge-dispatch";
+import { formatCodexBridgeMessage } from "./bridge-message-format";
 import { getLastClaudeSessionId } from "./claude-sdk-server";
 import { getLastCodexThreadId } from "./codex-app-server";
 import {
@@ -151,13 +152,21 @@ const reviewBridgePrompt = (
     .join("\n\n");
 
 const forwardBridgePrompt = (source: Agent, message: string): string =>
-  [
-    `Message from ${capitalize(source)} via the loop bridge:`,
-    message.trim(),
-    "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-    'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
-    "Do not acknowledge receipt without new information.",
-  ].join("\n\n");
+  (source === "claude"
+    ? [
+        formatCodexBridgeMessage(source, message),
+        "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
+        'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+        "Do not acknowledge receipt without new information.",
+      ]
+    : [
+        `Message from ${capitalize(source)} via the loop bridge:`,
+        message.trim(),
+        "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
+        'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+        "Do not acknowledge receipt without new information.",
+      ]
+  ).join("\n\n");
 
 const updateIds = (state: PairedState): void => {
   const next = touchRunManifest(

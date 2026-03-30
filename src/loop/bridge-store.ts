@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeChannelServerName } from "./bridge-config";
 import { BRIDGE_SERVER } from "./bridge-constants";
+import { normalizeBridgeMessage } from "./bridge-message-format";
 import {
   appendRunTranscriptEntry,
   buildTranscriptPath,
@@ -13,8 +14,6 @@ import type { Agent } from "./types";
 const BRIDGE_FILE = "bridge.jsonl";
 const LINE_SPLIT_RE = /\r?\n/;
 const MAX_STATUS_MESSAGES = 100;
-const BRIDGE_PREFIX_RE =
-  /^Message from (Claude|Codex) via the loop bridge:\s*/i;
 
 interface BridgeBaseEvent {
   at: string;
@@ -65,9 +64,6 @@ export const normalizeAgent = (value: unknown): Agent | undefined => {
   }
   return undefined;
 };
-
-const normalizeBridgeMessage = (message: string): string =>
-  message.trim().replace(BRIDGE_PREFIX_RE, "").replace(/\s+/g, " ");
 
 const orderedBridgePairKey = (source: Agent, target: Agent): string =>
   `${source}>${target}`;

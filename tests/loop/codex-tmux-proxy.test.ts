@@ -97,7 +97,7 @@ test("codex tmux proxy steers bridge messages into an active turn", () => {
       expectedTurnId: "turn-active",
       input: [
         {
-          text: "Please review the latest diff.",
+          text: "Claude: Please review the latest diff.",
           text_elements: [],
           type: "text",
         },
@@ -120,7 +120,7 @@ test("codex tmux proxy starts a new turn when no active turn exists", () => {
     params: {
       input: [
         {
-          text: "Please review the latest diff.",
+          text: "Claude: Please review the latest diff.",
           text_elements: [],
           type: "text",
         },

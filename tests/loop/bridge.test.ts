@@ -378,6 +378,50 @@ test("readPendingBridgeMessages keeps repeated messages until each is acknowledg
   rmSync(root, { recursive: true, force: true });
 });
 
+test("bridge normalization treats short and legacy Claude prefixes as equivalent", async () => {
+  const bridge = await loadBridge();
+  const root = makeTempDir();
+  const runDir = join(root, "run");
+  mkdirSync(runDir, { recursive: true });
+  const bridgeFile = bridge.bridgeInternals.bridgePath(runDir);
+
+  writeFileSync(
+    bridgeFile,
+    `${[
+      {
+        at: "2026-03-22T10:00:00.000Z",
+        id: "msg-1",
+        kind: "message",
+        message:
+          "Message from Claude via the loop bridge:\n\nPlease verify the final diff.",
+        source: "claude",
+        target: "codex",
+      },
+      {
+        at: "2026-03-22T10:01:00.000Z",
+        id: "msg-1",
+        kind: "delivered",
+        source: "claude",
+        target: "codex",
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`,
+    "utf8"
+  );
+
+  expect(
+    bridge.blocksBridgeBounce(
+      runDir,
+      "codex",
+      "claude",
+      "Claude: Please verify the final diff."
+    )
+  ).toBe(true);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("bridge MCP send_to_agent queues a direct message through the CLI path", async () => {
   const bridge = await loadBridge();
   const root = makeTempDir();
@@ -1029,7 +1073,7 @@ test("bridge delivers Claude replies directly to Codex when app-server state is 
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    "The files look good to me."
+    "Claude: The files look good to me."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(
@@ -1087,7 +1131,7 @@ test("bridge prefers Codex app-server delivery even when tmux is live", async ()
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    "Please steer this into the active turn."
+    "Claude: Please steer this into the active turn."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(
@@ -1148,7 +1192,7 @@ test("bridge falls back to direct Codex delivery when the stored tmux session is
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    "Please review the final state."
+    "Claude: Please review the final state."
   );
   expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
     undefined
@@ -1224,34 +1268,32 @@ test("bridge drains pending codex tmux messages through the injected command dep
 
   expect(delivered).toBe(true);
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
-  expect(spawnSync.mock.calls).toEqual(
-    expect.arrayContaining([
+  expect(spawnSync.mock.calls).toEqual([
+    [
+      ["tmux", "has-session", "-t", "repo-loop-8"],
+      { stderr: "ignore", stdout: "ignore" },
+    ],
+    [
+      ["tmux", "capture-pane", "-p", "-t", "repo-loop-8:0.1"],
+      { stderr: "ignore", stdout: "pipe" },
+    ],
+    [
       [
-        ["tmux", "has-session", "-t", "repo-loop-8"],
-        expect.objectContaining({ stderr: "ignore", stdout: "ignore" }),
+        "tmux",
+        "send-keys",
+        "-t",
+        "repo-loop-8:0.1",
+        "-l",
+        "--",
+        "Claude: Please check the tmux path.",
       ],
-      [
-        ["tmux", "capture-pane", "-p", "-t", "repo-loop-8:0.1"],
-        expect.objectContaining({ stderr: "ignore", stdout: "pipe" }),
-      ],
-      [
-        [
-          "tmux",
-          "send-keys",
-          "-t",
-          "repo-loop-8:0.1",
-          "-l",
-          "--",
-          "Please check the tmux path.",
-        ],
-        expect.objectContaining({ stderr: "ignore" }),
-      ],
-      [
-        ["tmux", "send-keys", "-t", "repo-loop-8:0.1", "Enter"],
-        expect.objectContaining({ stderr: "ignore" }),
-      ],
-    ])
-  );
+      { stderr: "ignore" },
+    ],
+    [
+      ["tmux", "send-keys", "-t", "repo-loop-8:0.1", "Enter"],
+      { stderr: "ignore" },
+    ],
+  ]);
 
   rmSync(root, { recursive: true, force: true });
 });
@@ -1541,8 +1583,16 @@ test("runBridgeWorker retries queued codex app-server messages", async () => {
 
   expect(injectCodexMessage).toHaveBeenCalledTimes(2);
   expect(injectCodexMessage.mock.calls).toEqual([
-    ["ws://127.0.0.1:4500", "codex-thread-1", "Please review the final diff."],
-    ["ws://127.0.0.1:4500", "codex-thread-1", "Please review the final diff."],
+    [
+      "ws://127.0.0.1:4500",
+      "codex-thread-1",
+      "Claude: Please review the final diff.",
+    ],
+    [
+      "ws://127.0.0.1:4500",
+      "codex-thread-1",
+      "Claude: Please review the final diff.",
+    ],
   ]);
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(
@@ -1949,7 +1999,7 @@ test("dispatchBridgeMessage reports delivered when direct codex delivery succeed
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    "Please review the final diff."
+    "Claude: Please review the final diff."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
 

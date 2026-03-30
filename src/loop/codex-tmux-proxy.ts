@@ -5,6 +5,7 @@ import {
   acknowledgeBridgeDelivery,
   readNextPendingBridgeMessageForTarget,
 } from "./bridge-dispatch";
+import { formatCodexBridgeMessage } from "./bridge-message-format";
 import { clearStaleTmuxBridgeState } from "./bridge-runtime";
 import type { BridgeMessage } from "./bridge-store";
 import { findFreePort } from "./ports";
@@ -172,7 +173,9 @@ const buildBridgeInjectionFrame = (
       method: TURN_STEER_METHOD,
       params: {
         expectedTurnId: activeTurnId,
-        input: buildInput(message.message),
+        input: buildInput(
+          formatCodexBridgeMessage(message.source, message.message)
+        ),
         threadId,
       },
     };
@@ -181,7 +184,9 @@ const buildBridgeInjectionFrame = (
     id: requestId,
     method: TURN_START_METHOD,
     params: {
-      input: buildInput(message.message),
+      input: buildInput(
+        formatCodexBridgeMessage(message.source, message.message)
+      ),
       threadId,
     },
   };

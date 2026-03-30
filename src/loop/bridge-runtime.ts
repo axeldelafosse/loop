@@ -15,6 +15,7 @@ import {
   bridgeChatId,
   readNextPendingBridgeMessageForTarget,
 } from "./bridge-dispatch";
+import { formatCodexBridgeMessage } from "./bridge-message-format";
 import {
   type BridgeMessage,
   type BridgeStatus,
@@ -331,7 +332,7 @@ export const deliverCodexBridgeMessage = async (
     const delivered = await injectCodexMessage(
       status.codexRemoteUrl,
       status.codexThreadId,
-      message.message
+      formatCodexBridgeMessage(message.source, message.message)
     );
     if (delivered) {
       acknowledgeBridgeDelivery(
@@ -363,7 +364,7 @@ export const drainCodexTmuxMessages = async (
   }
   const delivered = await injectCodexTmuxMessage(
     status.tmuxSession,
-    message.message
+    formatCodexBridgeMessage(message.source, message.message)
   );
   if (!delivered) {
     return false;
