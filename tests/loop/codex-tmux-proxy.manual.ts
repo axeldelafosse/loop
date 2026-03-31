@@ -32,12 +32,44 @@ interface JsonFrame {
 }
 
 const DEFAULT_MODEL = "gpt-5.4-mini";
-const PROXY_PORT_BASE = 26_000;
+const APP_SERVER_RETRY_DELAY_MS = 500;
+const APP_SERVER_RETRY_LIMIT = 3;
 const PROXY_PORT_RANGE = 500;
+const PROXY_PORT_RETRY_LIMIT = 5;
+const PROXY_PORT_START = 26_000;
+const PROXY_PORT_WINDOW = 20_000;
 const SESSION_PREFIX = "loop-proxy-e2e";
+const TUI_INITIALIZE_PARAMS = {
+  capabilities: { experimentalApi: true },
+  clientInfo: {
+    name: "loop-proxy-manual-e2e",
+    title: "loop-proxy-manual-e2e",
+    version: "1.0.0",
+  },
+};
 const TURN_TIMEOUT_MS = 60_000;
 
 const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-proxy-"));
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const asString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const extractTurnId = (value: unknown): string | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const turn = isRecord(value.turn) ? value.turn : undefined;
+  return asString(value.turnId) ?? asString(turn?.id);
+};
+
+const randomProxyPortBase = (): number =>
+  PROXY_PORT_START + Math.floor(Math.random() * PROXY_PORT_WINDOW);
+
+const findProxyPort = (): Promise<number> =>
+  findFreePort(randomProxyPortBase(), PROXY_PORT_RANGE);
 
 const waitFor = async (
   predicate: () => boolean,
@@ -52,6 +84,44 @@ const waitFor = async (
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(errorMessage);
+};
+
+const describeFrameError = (value: unknown): string => {
+  if (typeof value === "string" && value) {
+    return value;
+  }
+  if (isRecord(value) && typeof value.message === "string" && value.message) {
+    return value.message;
+  }
+  return JSON.stringify(value);
+};
+
+const waitForResponseFrame = async (
+  messages: JsonFrame[],
+  id: number,
+  label: string,
+  isClosed: () => boolean
+): Promise<JsonFrame> => {
+  await waitFor(
+    () => isClosed() || messages.some((frame) => frame.id === id),
+    TURN_TIMEOUT_MS,
+    `[manual e2e] ${label} did not complete`
+  );
+  if (isClosed()) {
+    throw new Error(
+      `[manual e2e] ${label} failed because the tui socket closed`
+    );
+  }
+  const frame = messages.find((entry) => entry.id === id);
+  if (!frame) {
+    throw new Error(`[manual e2e] ${label} did not complete`);
+  }
+  if (frame.error) {
+    throw new Error(
+      `[manual e2e] ${label} failed: ${describeFrameError(frame.error)}`
+    );
+  }
+  return frame;
 };
 
 const parseModel = (argv: string[]): string => {
@@ -99,12 +169,125 @@ const killTmuxSession = (name: string): void => {
   });
 };
 
+const startProxyWithRetries = async (
+  runDir: string,
+  remoteUrl: string,
+  threadId: string
+): Promise<{
+  proxyProcess: ReturnType<typeof spawn>;
+  proxyTask: Promise<void>;
+  proxyUrl: string;
+}> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PROXY_PORT_RETRY_LIMIT; attempt += 1) {
+    const port = await findProxyPort();
+    const proxyProcess = spawn(
+      [
+        process.execPath,
+        join(process.cwd(), "src", "cli.ts"),
+        CODEX_TMUX_PROXY_SUBCOMMAND,
+        runDir,
+        remoteUrl,
+        threadId,
+        String(port),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        stderr: "inherit",
+        stdin: "ignore",
+        stdout: "inherit",
+      }
+    );
+    const proxyTask = proxyProcess.exited.then((code) => {
+      if (code === 0) {
+        return;
+      }
+      throw new Error(`[manual e2e] proxy exited with code ${code}`);
+    });
+    try {
+      const proxyUrl = await Promise.race([
+        waitForCodexTmuxProxy(port),
+        proxyTask.then(() => {
+          throw new Error(
+            "[manual e2e] codex tmux proxy stopped before becoming ready"
+          );
+        }),
+      ]);
+      return { proxyProcess, proxyTask, proxyUrl };
+    } catch (error) {
+      proxyProcess.kill();
+      await Promise.race([
+        proxyTask.catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ]);
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("[manual e2e] failed to start the codex tmux proxy");
+};
+
+const startManualAppServer = async (
+  options: Parameters<typeof startAppServer>[0],
+  errorMessage: string
+): Promise<{ remoteUrl: string; threadId: string }> => {
+  let lastError: unknown = new Error(errorMessage);
+  for (let attempt = 0; attempt < APP_SERVER_RETRY_LIMIT; attempt += 1) {
+    try {
+      await startAppServer(options);
+      await waitFor(
+        () =>
+          Boolean(getCodexAppServerUrl()) && Boolean(getLastCodexThreadId()),
+        TURN_TIMEOUT_MS,
+        errorMessage
+      );
+      const remoteUrl = getCodexAppServerUrl();
+      const threadId = getLastCodexThreadId();
+      if (remoteUrl && threadId) {
+        return { remoteUrl, threadId };
+      }
+      lastError = new Error(errorMessage);
+    } catch (error) {
+      lastError = error;
+    }
+    await closeAppServer();
+    if (attempt + 1 < APP_SERVER_RETRY_LIMIT) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, APP_SERVER_RETRY_DELAY_MS)
+      );
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(errorMessage);
+};
+
+const waitForProxyReady = async (proxyUrl: string): Promise<void> => {
+  const readyUrl = new URL(proxyUrl);
+  readyUrl.pathname = "/readyz";
+  readyUrl.protocol = readyUrl.protocol === "wss:" ? "https:" : "http:";
+  const deadline = Date.now() + TURN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(readyUrl);
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // keep polling
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("[manual e2e] codex tmux proxy did not reconnect");
+};
+
 const sendTurn = async (
   socket: WebSocket,
   messages: JsonFrame[],
   id: number,
   text: string,
-  threadId: string
+  threadId: string,
+  isClosed: () => boolean
 ): Promise<void> => {
   socket.send(
     JSON.stringify({
@@ -122,16 +305,16 @@ const sendTurn = async (
       },
     })
   );
-  await waitFor(
-    () =>
-      messages.some(
-        (frame) =>
-          frame.id === id &&
-          (frame.result as { turn?: { id?: string } } | undefined)?.turn?.id
-      ),
-    TURN_TIMEOUT_MS,
-    `[manual e2e] turn ${id} was not accepted`
+  const frame = await waitForResponseFrame(
+    messages,
+    id,
+    `turn ${id}`,
+    isClosed
   );
+  const turnId = extractTurnId(frame.result);
+  if (!turnId) {
+    throw new Error(`[manual e2e] turn ${id} did not return a turn id`);
+  }
 };
 
 const main = async (): Promise<void> => {
@@ -142,11 +325,10 @@ const main = async (): Promise<void> => {
   const runDir = makeTempDir();
   const manifestPath = join(runDir, "manifest.json");
   const tmuxSession = `${SESSION_PREFIX}-${Date.now()}`;
-  const proxyPort = await findFreePort(PROXY_PORT_BASE, PROXY_PORT_RANGE);
-  const cliPath = join(process.cwd(), "src", "cli.ts");
   let proxyTask: Promise<void> | undefined;
   let proxyProcess: ReturnType<typeof spawn> | undefined;
   let tui: WebSocket | undefined;
+  let tuiClosed = false;
   const tuiMessages: JsonFrame[] = [];
 
   console.log(`[manual e2e] using model: ${model}`);
@@ -155,15 +337,15 @@ const main = async (): Promise<void> => {
   createTmuxSession(tmuxSession);
 
   try {
-    await startAppServer({
-      persistentThread: true,
-      threadModel: model,
-    });
-    const initialRemoteUrl = getCodexAppServerUrl();
-    const threadId = getLastCodexThreadId();
-    if (!(initialRemoteUrl && threadId)) {
-      throw new Error("[manual e2e] failed to start the real Codex app-server");
-    }
+    const initialAppServer = await startManualAppServer(
+      {
+        persistentThread: true,
+        threadModel: model,
+      },
+      "[manual e2e] failed to start the real Codex app-server"
+    );
+    const initialRemoteUrl = initialAppServer.remoteUrl;
+    const threadId = initialAppServer.threadId;
 
     writeRunManifest(
       manifestPath,
@@ -182,33 +364,18 @@ const main = async (): Promise<void> => {
       })
     );
 
-    proxyProcess = spawn(
-      process.execPath,
-      [
-        cliPath,
-        CODEX_TMUX_PROXY_SUBCOMMAND,
-        runDir,
-        initialRemoteUrl,
-        threadId,
-        String(proxyPort),
-      ],
-      {
-        cwd: process.cwd(),
-        stdio: ["ignore", "inherit", "inherit"],
-      }
+    const proxyStart = await startProxyWithRetries(
+      runDir,
+      initialRemoteUrl,
+      threadId
     );
-    proxyTask = new Promise<void>((resolve, reject) => {
-      proxyProcess.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(`[manual e2e] proxy exited with code ${code}`));
-      });
-      proxyProcess.on("error", reject);
-    });
-    const proxyUrl = await waitForCodexTmuxProxy(proxyPort);
+    proxyProcess = proxyStart.proxyProcess;
+    proxyTask = proxyStart.proxyTask;
+    const proxyUrl = proxyStart.proxyUrl;
     tui = new WebSocket(proxyUrl);
+    tui.onclose = () => {
+      tuiClosed = true;
+    };
     tui.onmessage = (event) => {
       tuiMessages.push(JSON.parse(String(event.data)) as JsonFrame);
     };
@@ -223,12 +390,22 @@ const main = async (): Promise<void> => {
         reject(new Error("[manual e2e] failed to open tui websocket"));
     });
 
-    tui.send(JSON.stringify({ id: 1, method: "initialize", params: {} }));
-    await waitFor(
-      () => tuiMessages.some((frame) => frame.id === 1 && frame.result),
-      TURN_TIMEOUT_MS,
-      "[manual e2e] initialize did not complete"
+    tui.send(
+      JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: TUI_INITIALIZE_PARAMS,
+      })
     );
+    const initializeFrame = await waitForResponseFrame(
+      tuiMessages,
+      1,
+      "initialize",
+      () => tuiClosed
+    );
+    if (!initializeFrame.result) {
+      throw new Error("[manual e2e] initialize did not return a result");
+    }
     console.log("[manual e2e] proxy initialized");
 
     await sendTurn(
@@ -236,23 +413,24 @@ const main = async (): Promise<void> => {
       tuiMessages,
       2,
       "Reply with exactly: before-reconnect",
-      threadId
+      threadId,
+      () => tuiClosed
     );
     console.log("[manual e2e] first turn accepted");
 
     await closeAppServer();
     console.log("[manual e2e] closed app-server to force reconnect");
 
-    await startAppServer({
-      persistentThread: true,
-      resumeThreadId: threadId,
-      threadModel: model,
-    });
-    const resumedRemoteUrl = getCodexAppServerUrl();
-    const resumedThreadId = getLastCodexThreadId() || threadId;
-    if (!resumedRemoteUrl) {
-      throw new Error("[manual e2e] failed to restart the Codex app-server");
-    }
+    const resumedAppServer = await startManualAppServer(
+      {
+        persistentThread: true,
+        resumeThreadId: threadId,
+        threadModel: model,
+      },
+      "[manual e2e] failed to restart the Codex app-server"
+    );
+    const resumedRemoteUrl = resumedAppServer.remoteUrl;
+    const resumedThreadId = resumedAppServer.threadId;
     updateRunManifest(manifestPath, (manifest) =>
       manifest
         ? {
@@ -262,6 +440,8 @@ const main = async (): Promise<void> => {
           }
         : manifest
     );
+    await waitForProxyReady(proxyUrl);
+    console.log("[manual e2e] proxy reconnected");
 
     appendBridgeMessage(
       runDir,
@@ -281,7 +461,8 @@ const main = async (): Promise<void> => {
       tuiMessages,
       3,
       "Reply with exactly: after-reconnect",
-      resumedThreadId
+      resumedThreadId,
+      () => tuiClosed
     );
     console.log("[manual e2e] second turn accepted");
     console.log("[manual e2e] success");

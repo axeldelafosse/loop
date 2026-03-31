@@ -176,6 +176,7 @@ bun tests/loop/codex-tmux-proxy.manual.ts --model gpt-5.4-mini
 ```
 
 This is a manual harness only. It is not part of `bun test`.
+It restarts against a fresh Codex thread after the app-server drop.
 
 ## Options
 

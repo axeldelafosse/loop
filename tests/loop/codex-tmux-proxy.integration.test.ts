@@ -40,8 +40,14 @@ const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-proxy-"));
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  (isRecord(value) ? value : {}) as Record<string, unknown>;
+
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
+
+const isBridgeRequestId = (value: unknown): boolean =>
+  typeof value === "string" && value.startsWith("proxy-bridge-");
 
 const isAddressInUseError = (error: unknown): boolean => {
   if (!isRecord(error)) {
@@ -138,10 +144,12 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
   const root = makeTempDir();
   const manifestPath = join(root, "manifest.json");
   const bridgeMethods: string[] = [];
+  const bridgeThreadIds: string[] = [];
   const tuiTurnIds: string[] = [];
   const upstreamSockets: ServerWebSocket<{ initialized: boolean }>[] = [];
   const tuiMessages: JsonFrame[] = [];
   let proxyTask: Promise<void> | undefined;
+  let upstreamInitializeCount = 0;
   let upstreamConnections = 0;
   let tuiClosed = false;
 
@@ -171,6 +179,7 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
             }
             const frame = JSON.parse(raw) as JsonFrame;
             if (frame.method === "initialize") {
+              upstreamInitializeCount += 1;
               if (ws.data.initialized) {
                 ws.send(
                   JSON.stringify({
@@ -187,13 +196,29 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
             if (frame.method === "initialized") {
               continue;
             }
+            if (frame.method === "thread/read") {
+              ws.send(
+                JSON.stringify({
+                  id: frame.id,
+                  result: {
+                    thread: {
+                      turns: [],
+                    },
+                  },
+                })
+              );
+              continue;
+            }
             if (frame.method === "turn/start") {
-              const turnId =
-                typeof frame.id === "number" && frame.id < 0
-                  ? "bridge-turn-after-reconnect"
-                  : `tui-turn-${tuiTurnIds.length + 1}`;
-              if (typeof frame.id === "number" && frame.id < 0) {
+              const threadId = asString(asRecord(frame.params).threadId);
+              const turnId = isBridgeRequestId(frame.id)
+                ? "bridge-turn-after-reconnect"
+                : `tui-turn-${tuiTurnIds.length + 1}`;
+              if (isBridgeRequestId(frame.id)) {
                 bridgeMethods.push(frame.method);
+                if (threadId) {
+                  bridgeThreadIds.push(threadId);
+                }
               } else {
                 tuiTurnIds.push(turnId);
               }
@@ -262,6 +287,7 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
       () => tuiMessages.some((frame) => frame.id === 1 && frame.result),
       5000
     );
+    expect(upstreamInitializeCount).toBe(1);
 
     tui.send(
       JSON.stringify({
@@ -292,6 +318,15 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
     upstreamSockets[0]?.close();
     await waitFor(() => upstreamConnections >= 2, 5000);
     expect(tuiClosed).toBe(false);
+    expect(upstreamInitializeCount).toBe(2);
+    updateRunManifest(manifestPath, (manifest) =>
+      manifest
+        ? {
+            ...manifest,
+            codexThreadId: "thread-2",
+          }
+        : manifest
+    );
 
     appendBridgeMessage(
       root,
@@ -301,6 +336,7 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
     );
     await waitFor(() => bridgeMethods.length > 0, 5000);
     expect(bridgeMethods).toEqual(["turn/start"]);
+    expect(bridgeThreadIds).toEqual(["thread-2"]);
 
     tui.send(
       JSON.stringify({
@@ -314,7 +350,7 @@ test("runCli reconnects the codex tmux proxy subcommand without dropping the tui
               type: "text",
             },
           ],
-          threadId: "thread-1",
+          threadId: "thread-2",
         },
       })
     );

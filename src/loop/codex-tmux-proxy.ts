@@ -28,8 +28,10 @@ const PROXY_UPSTREAM_INIT_TIMEOUT_MS = 5000;
 const PROXY_UPSTREAM_RECONNECT_BASE_DELAY_MS = 250;
 const PROXY_UPSTREAM_RECONNECT_MAX_ATTEMPTS = 40;
 const PROXY_UPSTREAM_RECONNECT_MAX_DELAY_MS = 2000;
+const BRIDGE_REQUEST_ID_PREFIX = "proxy-bridge-";
 const INITIALIZE_METHOD = "initialize";
 const INITIALIZED_METHOD = "initialized";
+const THREAD_READ_METHOD = "thread/read";
 const THREAD_RESUME_METHOD = "thread/resume";
 const THREAD_START_METHOD = "thread/start";
 const TURN_COMPLETED_METHOD = "turn/completed";
@@ -37,6 +39,7 @@ const TURN_STARTED_METHOD = "turn/started";
 const TURN_START_METHOD = "turn/start";
 const TURN_STEER_METHOD = "turn/steer";
 const USER_INPUT_TEXT_ELEMENTS = "text_elements";
+const DEBUG_PROXY = process.env.LOOP_DEBUG_PROXY === "1";
 
 export const CODEX_TMUX_PROXY_SUBCOMMAND = "__codex-tmux-proxy";
 
@@ -64,10 +67,19 @@ interface BridgeRequest {
   method: string;
 }
 
+interface PendingUpstreamRequest {
+  reject: (error: Error) => void;
+  resolve: (frame: JsonFrame) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 type StopReason = "dead-tmux" | "inactive-run";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  (isRecord(value) ? value : {}) as Record<string, unknown>;
 
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
@@ -101,9 +113,9 @@ const buildInput = (prompt: string): Record<string, unknown>[] => [
 
 const bridgeMessageId = (
   value: number | string | undefined
-): number | undefined => {
-  const numeric = asNumber(value);
-  return numeric !== undefined && numeric < 0 ? numeric : undefined;
+): string | undefined => {
+  const text = asString(value);
+  return text?.startsWith(BRIDGE_REQUEST_ID_PREFIX) ? text : undefined;
 };
 
 const buildProxyUrl = (port: number): string => `ws://127.0.0.1:${port}/`;
@@ -112,6 +124,12 @@ const wait = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+};
+
+const debugProxy = (message: string): void => {
+  if (DEBUG_PROXY) {
+    console.error(`[loop-proxy] ${message}`);
+  }
 };
 
 const extractTurnId = (value: unknown): string | undefined => {
@@ -128,6 +146,43 @@ const extractThreadId = (value: unknown): string | undefined => {
   }
   const thread = isRecord(value.thread) ? value.thread : undefined;
   return asString(thread?.id) ?? asString(value.threadId);
+};
+
+const extractActiveTurnId = (value: unknown): string | undefined => {
+  const thread = isRecord(asRecord(value).thread) ? asRecord(value).thread : {};
+  if (!Array.isArray(thread.turns)) {
+    return undefined;
+  }
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const turn = isRecord(thread.turns[index])
+      ? thread.turns[index]
+      : undefined;
+    if (turn && asString(turn.status) === "inProgress") {
+      return asString(turn.id);
+    }
+  }
+  return undefined;
+};
+
+const parseErrorText = (value: unknown): string | undefined => {
+  const record = isRecord(value) ? value : {};
+  const error = isRecord(record.error) ? record.error : {};
+  return (
+    asString(error.message) ||
+    asString(record.message) ||
+    asString(record.reason)
+  );
+};
+
+const isBusyTurnError = (value: unknown): boolean => {
+  const message = parseErrorText(value)?.toLowerCase() ?? "";
+  return (
+    message.includes("active turn") ||
+    message.includes("already active") ||
+    message.includes("busy") ||
+    message.includes("in progress") ||
+    message.includes("turn still active")
+  );
 };
 
 const latestActiveTurnId = (turnIds: Set<string>): string | undefined => {
@@ -168,7 +223,7 @@ const persistCodexThreadId = (runDir: string, threadId: string): void => {
 };
 
 const buildBridgeInjectionFrame = (
-  requestId: number,
+  requestId: string,
   threadId: string,
   message: BridgeMessage,
   activeTurnId?: string
@@ -231,14 +286,11 @@ const shouldStopForTmuxSession = (
   return true;
 };
 
-const patchInitializeError = (frame: JsonFrame): JsonFrame => {
-  const error = isRecord(frame.error) ? frame.error : undefined;
-  const message = asString(error?.message)?.toLowerCase() ?? "";
-  if (!message.includes("already initialized")) {
-    return frame;
-  }
+const proxyInitializeResponse = (
+  id: number | string | undefined
+): JsonFrame => {
   return {
-    id: frame.id,
+    id,
     result: {
       platformFamily: "unix",
       platformOs: process.platform === "darwin" ? "macos" : process.platform,
@@ -275,15 +327,16 @@ const reconnectDelayMs = (attempt: number): number =>
 
 class CodexTmuxProxy {
   private readonly activeTurnIds = new Set<string>();
-  private readonly bridgeRequests = new Map<number, BridgeRequest>();
+  private readonly bridgeRequests = new Map<string, BridgeRequest>();
   private readonly port: number;
   private remoteUrl: string;
   private readonly routes = new Map<number, ProxyRoute>();
   private readonly runDir: string;
+  private readonly upstreamRequests = new Map<string, PendingUpstreamRequest>();
   private currentConnId = 0;
   private drainTimer: ReturnType<typeof setInterval> | undefined;
   private initialized = false;
-  private nextBridgeRequestId = -1;
+  private nextBridgeRequestId = 1;
   private nextProxyId = 100_000;
   private proxyServer: ReturnType<typeof serve> | undefined;
   private reconnectAttemptCount = 0;
@@ -407,6 +460,15 @@ class CodexTmuxProxy {
     return this.remoteUrl;
   }
 
+  private resolveThreadId(): string {
+    const manifest = readRunManifest(join(this.runDir, "manifest.json"));
+    const nextThreadId = manifest?.codexThreadId || this.threadId;
+    if (nextThreadId) {
+      this.threadId = nextThreadId;
+    }
+    return this.threadId;
+  }
+
   private attachUpstream(ws: WsClient): void {
     this.upstream = ws;
     this.reconnecting = false;
@@ -498,6 +560,62 @@ class CodexTmuxProxy {
       throw error;
     }
     this.attachUpstream(ws);
+    await this.refreshActiveTurnState().catch(() => undefined);
+  }
+
+  private sendUpstreamRequest(
+    method: string,
+    params: Record<string, unknown>
+  ): Promise<JsonFrame> {
+    if (!this.upstream) {
+      throw new Error("codex app-server upstream is not connected");
+    }
+    const requestId = `proxy-${method}-${Date.now()}-${this.nextProxyId++}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.upstreamRequests.delete(requestId);
+        reject(new Error(`codex tmux proxy upstream ${method} timed out`));
+      }, PROXY_UPSTREAM_INIT_TIMEOUT_MS);
+      this.upstreamRequests.set(requestId, { reject, resolve, timeout });
+      this.upstream?.send(
+        `${JSON.stringify({
+          id: requestId,
+          method,
+          params,
+        })}\n`
+      );
+    });
+  }
+
+  private async refreshActiveTurnState(): Promise<void> {
+    if (!(this.threadId && this.upstream)) {
+      this.activeTurnIds.clear();
+      this.turnInProgress = false;
+      return;
+    }
+    const frame = await this.sendUpstreamRequest(THREAD_READ_METHOD, {
+      includeTurns: true,
+      threadId: this.threadId,
+    });
+    this.activeTurnIds.clear();
+    const activeTurnId = extractActiveTurnId(frame.result);
+    debugProxy(
+      `thread/read thread=${this.threadId} activeTurn=${activeTurnId ?? "none"}`
+    );
+    if (activeTurnId) {
+      this.activeTurnIds.add(activeTurnId);
+      this.turnInProgress = true;
+      return;
+    }
+    this.turnInProgress = false;
+  }
+
+  private async refreshActiveTurnStateAfterBusyError(): Promise<void> {
+    try {
+      await this.refreshActiveTurnState();
+    } catch {
+      this.turnInProgress = false;
+    }
   }
 
   private failPendingRoutes(message: string): void {
@@ -515,6 +633,11 @@ class CodexTmuxProxy {
   private clearUpstreamState(): void {
     this.failPendingRoutes("codex app-server upstream disconnected");
     this.bridgeRequests.clear();
+    for (const request of this.upstreamRequests.values()) {
+      clearTimeout(request.timeout);
+      request.reject(new Error("codex app-server upstream disconnected"));
+    }
+    this.upstreamRequests.clear();
     this.activeTurnIds.clear();
     this.turnInProgress = false;
   }
@@ -593,6 +716,11 @@ class CodexTmuxProxy {
       this.upstream?.send(raw);
       return;
     }
+    if (frame.method === INITIALIZE_METHOD) {
+      this.initialized = true;
+      this.forwardToTui(JSON.stringify(proxyInitializeResponse(frame.id)));
+      return;
+    }
     if (!this.upstream) {
       this.forwardToTui(
         JSON.stringify(
@@ -645,8 +773,31 @@ class CodexTmuxProxy {
       return;
     }
 
+    const upstreamRequestId = asString(frame.id);
+    if (upstreamRequestId) {
+      const request = this.upstreamRequests.get(upstreamRequestId);
+      if (request) {
+        this.upstreamRequests.delete(upstreamRequestId);
+        clearTimeout(request.timeout);
+        if (frame.error) {
+          request.reject(
+            new Error(
+              parseErrorText(frame.error) ??
+                `codex tmux proxy upstream ${upstreamRequestId} failed`
+            )
+          );
+        } else {
+          request.resolve(frame);
+        }
+        return;
+      }
+    }
+
     const bridgeId = bridgeMessageId(frame.id);
     if (bridgeId !== undefined) {
+      debugProxy(
+        `bridge response id=${bridgeId} error=${parseErrorText(frame.error) ?? "none"}`
+      );
       this.handleBridgeResponse(bridgeId, frame);
       return;
     }
@@ -669,21 +820,12 @@ class CodexTmuxProxy {
 
     this.handleTrackedResponse(route, frame);
     frame.id = route.clientId;
-    const response =
-      route.method === INITIALIZE_METHOD ? patchInitializeError(frame) : frame;
-    this.forwardToTui(JSON.stringify(response));
+    this.forwardToTui(JSON.stringify(frame));
   }
 
   private handleTrackedResponse(route: ProxyRoute, frame: JsonFrame): void {
     if (frame.error && route.method === TURN_START_METHOD) {
       this.turnInProgress = false;
-      return;
-    }
-
-    if (route.method === INITIALIZE_METHOD) {
-      if (!patchInitializeError(frame).error) {
-        this.initialized = true;
-      }
       return;
     }
 
@@ -705,13 +847,26 @@ class CodexTmuxProxy {
     }
   }
 
-  private handleBridgeResponse(id: number, frame: JsonFrame): void {
+  private handleBridgeResponse(id: string, frame: JsonFrame): void {
     const request = this.bridgeRequests.get(id);
     if (!request) {
       return;
     }
     this.bridgeRequests.delete(id);
     if (frame.error) {
+      if (request.method === TURN_STEER_METHOD) {
+        this.activeTurnIds.clear();
+        this.turnInProgress = false;
+        return;
+      }
+      if (
+        request.method === TURN_START_METHOD &&
+        isBusyTurnError(frame.error)
+      ) {
+        this.turnInProgress = true;
+        this.refreshActiveTurnStateAfterBusyError();
+        return;
+      }
       this.turnInProgress = this.activeTurnIds.size > 0;
       return;
     }
@@ -781,9 +936,8 @@ class CodexTmuxProxy {
       this.stop();
       return;
     }
-    if (
-      !(this.initialized && this.threadId && this.tuiSocket && this.upstream)
-    ) {
+    const threadId = this.resolveThreadId();
+    if (!(this.initialized && threadId && this.tuiSocket && this.upstream)) {
       return;
     }
     const activeTurnId = latestActiveTurnId(this.activeTurnIds);
@@ -801,10 +955,10 @@ class CodexTmuxProxy {
       return;
     }
 
-    const requestId = this.nextBridgeRequestId--;
+    const requestId = `${BRIDGE_REQUEST_ID_PREFIX}${this.nextBridgeRequestId++}`;
     const frame = buildBridgeInjectionFrame(
       requestId,
-      this.threadId,
+      threadId,
       message,
       activeTurnId
     );
@@ -813,6 +967,9 @@ class CodexTmuxProxy {
       method: frame.method ?? TURN_START_METHOD,
     });
     this.turnInProgress = true;
+    debugProxy(
+      `bridge send id=${requestId} method=${frame.method ?? TURN_START_METHOD} thread=${this.threadId}`
+    );
     this.forwardToUpstream(frame);
   }
 }
@@ -859,7 +1016,7 @@ export const codexTmuxProxyInternals = {
   latestActiveTurnId,
   buildProxyUrl,
   noteStartedTurn,
-  patchInitializeError,
+  proxyInitializeResponse,
   persistCodexThreadId,
   shouldPauseBridgeDrain,
   shouldStopForTmuxSession,
