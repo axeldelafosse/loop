@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ServerWebSocket, serve } from "bun";
+import { appendBridgeMessage } from "../../src/loop/bridge-store";
 import {
   codexTmuxProxyInternals,
   runCodexTmuxProxy,
@@ -25,6 +26,11 @@ const bridgeMessage = {
   target: "codex" as const,
 };
 
+const TEST_PORT_RANGE = 200;
+const TEST_PORT_RETRY_LIMIT = 5;
+const TEST_PORT_START = 20_000;
+const TEST_PORT_WINDOW = 20_000;
+
 interface JsonFrame {
   error?: unknown;
   id?: number | string;
@@ -34,6 +40,83 @@ interface JsonFrame {
 }
 
 const makeTempDir = (): string => mkdtempSync(join(tmpdir(), "loop-proxy-"));
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const asString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const isAddressInUseError = (error: unknown): boolean => {
+  if (!isRecord(error)) {
+    return false;
+  }
+  const code = asString(error.code);
+  if (code === "EADDRINUSE") {
+    return true;
+  }
+  const message = asString(error.message)?.toLowerCase() ?? "";
+  return message.includes("eaddrinuse");
+};
+
+const randomTestPortBase = (): number =>
+  TEST_PORT_START + Math.floor(Math.random() * TEST_PORT_WINDOW);
+
+const findTestPort = (): Promise<number> =>
+  findFreePort(randomTestPortBase(), TEST_PORT_RANGE);
+
+const startServerWithRetries = async (
+  createServer: (port: number) => ReturnType<typeof serve>
+): Promise<{ port: number; server: ReturnType<typeof serve> }> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < TEST_PORT_RETRY_LIMIT; attempt += 1) {
+    const port = await findTestPort();
+    try {
+      return {
+        port,
+        server: createServer(port),
+      };
+    } catch (error) {
+      if (!isAddressInUseError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("failed to start test server");
+};
+
+const startProxyWithRetries = async (
+  runDir: string,
+  remoteUrl: string,
+  threadId: string
+): Promise<{ proxyTask: Promise<void>; proxyUrl: string }> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < TEST_PORT_RETRY_LIMIT; attempt += 1) {
+    const port = await findTestPort();
+    const proxyTask = runCodexTmuxProxy(runDir, remoteUrl, threadId, port);
+    try {
+      const proxyUrl = await Promise.race([
+        waitForCodexTmuxProxy(port),
+        proxyTask.then(() => {
+          throw new Error("codex tmux proxy stopped before becoming ready");
+        }),
+      ]);
+      return { proxyTask, proxyUrl };
+    } catch (error) {
+      if (!isAddressInUseError(error)) {
+        throw error;
+      }
+      await proxyTask.catch(() => undefined);
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("failed to start codex tmux proxy");
+};
 
 const waitFor = async (
   predicate: () => boolean,
@@ -204,13 +287,91 @@ test("codex tmux proxy persists newer live thread ids to the run manifest", () =
 test("codex tmux proxy reconnects to a live upstream without dropping the tui socket", async () => {
   const root = makeTempDir();
   const manifestPath = join(root, "manifest.json");
-  const upstreamPort = await findFreePort(4700, 100);
-  const proxyPort = await findFreePort(4800, 100);
-  const upstreamUrl = `ws://127.0.0.1:${upstreamPort}/`;
+  const bridgeMethods: string[] = [];
+  const tuiTurnIds: string[] = [];
   const upstreamSockets: ServerWebSocket<{ initialized: boolean }>[] = [];
+  let upstreamConnections = 0;
+  let proxyTask: Promise<void> | undefined;
+  let upstreamServer: ReturnType<typeof serve> | undefined;
+  let upstreamPort = 0;
+  let proxyUrl = "";
+  const upstreamStart = await startServerWithRetries((port) =>
+    serve({
+      fetch: (request, server) => {
+        if (server.upgrade(request, { data: { initialized: false } })) {
+          return undefined;
+        }
+        return new Response("upstream");
+      },
+      hostname: "127.0.0.1",
+      port,
+      websocket: {
+        close: (ws) => {
+          const index = upstreamSockets.indexOf(ws);
+          if (index !== -1) {
+            upstreamSockets.splice(index, 1);
+          }
+        },
+        message: (ws, message) => {
+          const payload =
+            typeof message === "string" ? message : message.toString();
+          for (const raw of payload.split("\n")) {
+            if (!raw.trim()) {
+              continue;
+            }
+            const frame = JSON.parse(raw) as JsonFrame;
+            if (frame.method === "initialize") {
+              if (ws.data.initialized) {
+                ws.send(
+                  JSON.stringify({
+                    error: { message: "already initialized" },
+                    id: frame.id,
+                  })
+                );
+              } else {
+                ws.data.initialized = true;
+                ws.send(JSON.stringify({ id: frame.id, result: {} }));
+              }
+              continue;
+            }
+            if (frame.method === "initialized") {
+              continue;
+            }
+            if (frame.method === "turn/start") {
+              const turnId =
+                typeof frame.id === "number" && frame.id < 0
+                  ? "bridge-turn-after-reconnect"
+                  : `tui-turn-${tuiTurnIds.length + 1}`;
+              if (typeof frame.id === "number" && frame.id < 0) {
+                bridgeMethods.push(frame.method);
+              } else {
+                tuiTurnIds.push(turnId);
+              }
+              ws.send(
+                JSON.stringify({
+                  id: frame.id,
+                  result: { turn: { id: turnId } },
+                })
+              );
+              continue;
+            }
+            if (typeof frame.id === "number" && frame.id < 0 && frame.method) {
+              bridgeMethods.push(frame.method);
+            }
+          }
+        },
+        open: (ws) => {
+          upstreamConnections += 1;
+          upstreamSockets.push(ws);
+        },
+      },
+    })
+  );
+  upstreamPort = upstreamStart.port;
+  upstreamServer = upstreamStart.server;
+  const upstreamUrl = `ws://127.0.0.1:${upstreamPort}/`;
   const tuiMessages: JsonFrame[] = [];
   let tuiClosed = false;
-  let upstreamConnections = 0;
 
   writeRunManifest(
     manifestPath,
@@ -228,69 +389,15 @@ test("codex tmux proxy reconnects to a live upstream without dropping the tui so
     })
   );
 
-  const upstreamServer = serve({
-    fetch: (request, server) => {
-      if (server.upgrade(request, { data: { initialized: false } })) {
-        return undefined;
-      }
-      return new Response("upstream");
-    },
-    hostname: "127.0.0.1",
-    port: upstreamPort,
-    websocket: {
-      close: (ws) => {
-        const index = upstreamSockets.indexOf(ws);
-        if (index !== -1) {
-          upstreamSockets.splice(index, 1);
-        }
-      },
-      message: (ws, message) => {
-        const payload =
-          typeof message === "string" ? message : message.toString();
-        for (const raw of payload.split("\n")) {
-          if (!raw.trim()) {
-            continue;
-          }
-          const frame = JSON.parse(raw) as JsonFrame;
-          if (frame.method === "initialize") {
-            if (ws.data.initialized) {
-              ws.send(
-                JSON.stringify({
-                  error: { message: "already initialized" },
-                  id: frame.id,
-                })
-              );
-            } else {
-              ws.data.initialized = true;
-              ws.send(JSON.stringify({ id: frame.id, result: {} }));
-            }
-            continue;
-          }
-          if (frame.method === "initialized") {
-            continue;
-          }
-          if (frame.method === "turn/start") {
-            ws.send(
-              JSON.stringify({
-                id: frame.id,
-                result: { turn: { id: "turn-after-reconnect" } },
-              })
-            );
-          }
-        }
-      },
-      open: (ws) => {
-        upstreamConnections += 1;
-        upstreamSockets.push(ws);
-      },
-    },
-  });
-
-  const proxyTask = runCodexTmuxProxy(root, upstreamUrl, "thread-1", proxyPort);
-
   let tui: WebSocket | undefined;
   try {
-    const proxyUrl = await waitForCodexTmuxProxy(proxyPort);
+    const proxyStart = await startProxyWithRetries(
+      root,
+      upstreamUrl,
+      "thread-1"
+    );
+    proxyTask = proxyStart.proxyTask;
+    proxyUrl = proxyStart.proxyUrl;
     tui = new WebSocket(proxyUrl);
     tui.onclose = () => {
       tuiClosed = true;
@@ -314,10 +421,6 @@ test("codex tmux proxy reconnects to a live upstream without dropping the tui so
       5000
     );
 
-    upstreamSockets[0]?.close();
-    await waitFor(() => upstreamConnections >= 2, 5000);
-    expect(tuiClosed).toBe(false);
-
     tui.send(
       JSON.stringify({
         id: 2,
@@ -325,7 +428,46 @@ test("codex tmux proxy reconnects to a live upstream without dropping the tui so
         params: {
           input: [
             {
-              text: "hello",
+              text: "hello before reconnect",
+              text_elements: [],
+              type: "text",
+            },
+          ],
+          threadId: "thread-1",
+        },
+      })
+    );
+    await waitFor(
+      () =>
+        tuiMessages.some(
+          (frame) =>
+            frame.id === 2 &&
+            (frame.result as { turn?: { id?: string } } | undefined)?.turn?.id
+        ),
+      5000
+    );
+
+    upstreamSockets[0]?.close();
+    await waitFor(() => upstreamConnections >= 2, 5000);
+    expect(tuiClosed).toBe(false);
+
+    appendBridgeMessage(
+      root,
+      bridgeMessage.source,
+      bridgeMessage.target,
+      bridgeMessage.message
+    );
+    await waitFor(() => bridgeMethods.length > 0, 5000);
+    expect(bridgeMethods).toEqual(["turn/start"]);
+
+    tui.send(
+      JSON.stringify({
+        id: 3,
+        method: "turn/start",
+        params: {
+          input: [
+            {
+              text: "hello after reconnect",
               text_elements: [],
               type: "text",
             },
@@ -339,9 +481,8 @@ test("codex tmux proxy reconnects to a live upstream without dropping the tui so
       () =>
         tuiMessages.some(
           (frame) =>
-            frame.id === 2 &&
-            (frame.result as { turn?: { id?: string } } | undefined)?.turn
-              ?.id === "turn-after-reconnect"
+            frame.id === 3 &&
+            (frame.result as { turn?: { id?: string } } | undefined)?.turn?.id
         ),
       5000
     );
@@ -358,10 +499,10 @@ test("codex tmux proxy reconnects to a live upstream without dropping the tui so
         : manifest
     );
     await Promise.race([
-      proxyTask,
+      proxyTask ?? Promise.resolve(),
       new Promise((resolve) => setTimeout(resolve, 2000)),
     ]);
-    upstreamServer.stop(true);
+    upstreamServer?.stop(true);
     rmSync(root, { recursive: true, force: true });
   }
 });

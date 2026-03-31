@@ -515,7 +515,8 @@ class CodexTmuxProxy {
   private clearUpstreamState(): void {
     this.failPendingRoutes("codex app-server upstream disconnected");
     this.bridgeRequests.clear();
-    this.turnInProgress = this.activeTurnIds.size > 0;
+    this.activeTurnIds.clear();
+    this.turnInProgress = false;
   }
 
   private scheduleReconnect(): void {
