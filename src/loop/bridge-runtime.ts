@@ -329,7 +329,7 @@ export const deliverCodexBridgeMessage = async (
     const delivered = await injectCodexMessage(
       status.codexRemoteUrl,
       status.codexThreadId,
-      formatCodexBridgeMessage(message.source, message.message, message.id)
+      formatCodexBridgeMessage(message.source, message.message)
     );
     if (delivered) {
       acknowledgeBridgeDelivery(
@@ -361,7 +361,7 @@ export const drainCodexTmuxMessages = async (
   }
   const delivered = await injectCodexTmuxMessage(
     status.tmuxSession,
-    formatCodexBridgeMessage(message.source, message.message, message.id)
+    formatCodexBridgeMessage(message.source, message.message)
   );
   if (!delivered) {
     return false;

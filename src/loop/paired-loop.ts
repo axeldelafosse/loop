@@ -153,17 +153,15 @@ const reviewBridgePrompt = (
     .join("\n\n");
 
 const forwardBridgePrompt = ({
-  id,
   message,
   source,
 }: {
-  id: string;
   message: string;
   source: Agent;
 }): string =>
   (source === "claude"
     ? [
-        formatCodexBridgeMessage(source, message, id),
+        formatCodexBridgeMessage(source, message),
         "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
         'Send a message to the other agent with "send_message" only when you have something useful for them to act on.',
         "Do not acknowledge receipt without new information.",

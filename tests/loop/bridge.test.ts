@@ -75,16 +75,6 @@ const toolText = (stdout: string, id: number): string => {
   )?.content;
   return content?.[0]?.text ?? "";
 };
-const codexBridgeEnvelope = (
-  id: string,
-  message: string,
-  source: "claude" | "codex" = "claude"
-): string =>
-  [
-    `<loop-bridge source="${source}" message_id="${id}">`,
-    `${source === "claude" ? "Claude" : "Codex"}: ${message}`,
-    "</loop-bridge>",
-  ].join("\n");
 
 const runBridgeProcess = async (
   runDir: string,
@@ -481,15 +471,6 @@ test("bridge normalization treats short and legacy Claude prefixes as equivalent
       "Claude: Please verify the final diff."
     )
   ).toBe(true);
-  expect(
-    bridge.blocksBridgeBounce(
-      runDir,
-      "codex",
-      "claude",
-      codexBridgeEnvelope("msg-2", "Please verify the final diff.")
-    )
-  ).toBe(true);
-
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -1181,7 +1162,7 @@ test("bridge delivers Claude replies directly to Codex when app-server state is 
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    codexBridgeEnvelope("msg-1", "The files look good to me.")
+    "Claude: The files look good to me."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(
@@ -1239,7 +1220,7 @@ test("bridge prefers Codex app-server delivery even when tmux is live", async ()
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    codexBridgeEnvelope("msg-live", "Please steer this into the active turn.")
+    "Claude: Please steer this into the active turn."
   );
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);
   expect(
@@ -1300,7 +1281,7 @@ test("bridge falls back to direct Codex delivery when the stored tmux session is
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    '<loop-bridge source="claude" message_id="msg-2">\nClaude: Please review the final state.\n</loop-bridge>'
+    "Claude: Please review the final state."
   );
   expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
     undefined
@@ -1393,39 +1374,7 @@ test("bridge drains pending codex tmux messages through the injected command dep
         "repo-loop-8:0.1",
         "-l",
         "--",
-        '<loop-bridge source="claude" message_id="msg-3">',
-      ],
-      { stderr: "ignore" },
-    ],
-    [
-      ["tmux", "send-keys", "-t", "repo-loop-8:0.1", "C-j"],
-      { stderr: "ignore" },
-    ],
-    [
-      [
-        "tmux",
-        "send-keys",
-        "-t",
-        "repo-loop-8:0.1",
-        "-l",
-        "--",
         "Claude: Please check the tmux path.",
-      ],
-      { stderr: "ignore" },
-    ],
-    [
-      ["tmux", "send-keys", "-t", "repo-loop-8:0.1", "C-j"],
-      { stderr: "ignore" },
-    ],
-    [
-      [
-        "tmux",
-        "send-keys",
-        "-t",
-        "repo-loop-8:0.1",
-        "-l",
-        "--",
-        "</loop-bridge>",
       ],
       { stderr: "ignore" },
     ],
@@ -1732,10 +1681,7 @@ test("runBridgeWorker falls back to app-server delivery after stale tmux cleanup
   expect(injectCodexMessage).toHaveBeenCalledWith(
     "ws://127.0.0.1:4500",
     "codex-thread-1",
-    codexBridgeEnvelope(
-      "msg-stale-fallback",
-      "Please deliver this after tmux cleanup."
-    )
+    "Claude: Please deliver this after tmux cleanup."
   );
   expect(readRunManifest(join(runDir, "manifest.json"))?.tmuxSession).toBe(
     undefined
@@ -1847,12 +1793,12 @@ test("runBridgeWorker retries queued codex app-server messages", async () => {
     [
       "ws://127.0.0.1:4500",
       "codex-thread-1",
-      codexBridgeEnvelope("msg-4", "Please review the final diff."),
+      "Claude: Please review the final diff.",
     ],
     [
       "ws://127.0.0.1:4500",
       "codex-thread-1",
-      codexBridgeEnvelope("msg-4", "Please review the final diff."),
+      "Claude: Please review the final diff.",
     ],
   ]);
   expect(bridge.readPendingBridgeMessages(runDir)).toEqual([]);

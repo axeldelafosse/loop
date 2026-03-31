@@ -235,7 +235,7 @@ const buildBridgeInjectionFrame = (
       params: {
         expectedTurnId: activeTurnId,
         input: buildInput(
-          formatCodexBridgeMessage(message.source, message.message, message.id)
+          formatCodexBridgeMessage(message.source, message.message)
         ),
         threadId,
       },
@@ -246,7 +246,7 @@ const buildBridgeInjectionFrame = (
     method: TURN_START_METHOD,
     params: {
       input: buildInput(
-        formatCodexBridgeMessage(message.source, message.message, message.id)
+        formatCodexBridgeMessage(message.source, message.message)
       ),
       threadId,
     },

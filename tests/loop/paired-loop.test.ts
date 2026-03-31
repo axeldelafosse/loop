@@ -772,9 +772,6 @@ test("runPairedLoop delivers peer messages back to the primary agent", async () 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.agent).toBe("claude");
     expect(calls[1]?.agent).toBe("codex");
-    expect(calls[1]?.prompt).toContain(
-      '<loop-bridge source="claude" message_id="msg-1">'
-    );
     expect(calls[1]?.prompt).toContain("Claude: Please verify");
     expect(calls[1]?.prompt).toContain(
       "Please verify the implementation details."
@@ -817,9 +814,6 @@ test("runPairedLoop skips the default work turn after draining input for the pri
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.agent).toBe("codex");
-    expect(calls[0]?.prompt).toContain(
-      '<loop-bridge source="claude" message_id="msg-1">'
-    );
     expect(calls[0]?.prompt).toContain("Claude: Please verify");
     expect(calls[0]?.prompt).toContain(
       "Please verify the implementation details."
