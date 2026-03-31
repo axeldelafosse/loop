@@ -6,7 +6,7 @@ import { buildLaunchArgv } from "./launch";
 import type { Agent } from "./types";
 
 const CODEX_AUTO_APPROVED_BRIDGE_TOOLS = [
-  "send_to_agent",
+  "send_message",
   "bridge_status",
   "receive_messages",
 ] as const;

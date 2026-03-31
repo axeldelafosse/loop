@@ -28,6 +28,12 @@ const bridgeMessage = {
   source: "claude" as const,
   target: "codex" as const,
 };
+const codexBridgeEnvelope = (id: string, message: string): string =>
+  [
+    `<loop-bridge source="claude" message_id="${id}">`,
+    `Claude: ${message}`,
+    "</loop-bridge>",
+  ].join("\n");
 
 const TEST_PORT_RANGE = 200;
 const TEST_PORT_RETRY_LIMIT = 5;
@@ -215,7 +221,7 @@ test("codex tmux proxy steers bridge messages into an active turn", () => {
       expectedTurnId: "turn-active",
       input: [
         {
-          text: "Claude: Please review the latest diff.",
+          text: codexBridgeEnvelope("msg-1", "Please review the latest diff."),
           text_elements: [],
           type: "text",
         },
@@ -238,7 +244,7 @@ test("codex tmux proxy starts a new turn when no active turn exists", () => {
     params: {
       input: [
         {
-          text: "Claude: Please review the latest diff.",
+          text: codexBridgeEnvelope("msg-1", "Please review the latest diff."),
           text_elements: [],
           type: "text",
         },

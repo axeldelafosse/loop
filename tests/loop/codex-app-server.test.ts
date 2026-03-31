@@ -357,7 +357,7 @@ test("startAppServer normalizes codex bridge config args before spawning", async
     "-c",
     expect.stringContaining("mcp_servers.loop-bridge.args="),
     "-c",
-    'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
+    'mcp_servers.loop-bridge.tools.send_message.approval_mode="approve"',
     "-c",
     'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
     "-c",

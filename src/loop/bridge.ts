@@ -1,3 +1,5 @@
+import { mkdirSync, watch } from "node:fs";
+import { basename } from "node:path";
 import { claudeChannelServerName } from "./bridge-config";
 import { BRIDGE_SERVER as BRIDGE_SERVER_VALUE } from "./bridge-constants";
 import {
@@ -28,8 +30,8 @@ import {
 import { LOOP_VERSION } from "./constants";
 import type { Agent } from "./types";
 
-const CHANNEL_POLL_DELAY_MS = 500;
 const CLAUDE_CHANNEL_CAPABILITY = "claude/channel";
+const CLAUDE_CHANNEL_FALLBACK_SWEEP_MS = 2000;
 const CONTENT_LENGTH_RE = /Content-Length:\s*(\d+)/i;
 const CONTENT_LENGTH_PREFIX = "content-length:";
 const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
@@ -142,7 +144,7 @@ const handleReceiveMessagesTool = (
   });
 };
 
-const handleSendToAgentTool = async (
+const handleSendMessageTool = async (
   id: JsonRpcRequest["id"],
   runDir: string,
   source: Agent,
@@ -154,7 +156,7 @@ const handleSendToAgentTool = async (
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      "send_to_agent requires a non-empty target"
+      "send_message requires a non-empty target"
     );
     return;
   }
@@ -171,7 +173,7 @@ const handleSendToAgentTool = async (
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      "send_to_agent requires a non-empty message"
+      "send_message requires a non-empty message"
     );
     return;
   }
@@ -179,7 +181,7 @@ const handleSendToAgentTool = async (
     writeError(
       id,
       MCP_INVALID_PARAMS,
-      "send_to_agent cannot target the current agent"
+      "send_message cannot target the current agent"
     );
     return;
   }
@@ -244,12 +246,21 @@ const handleToolCall = async (
     return;
   }
 
-  if (name !== "send_to_agent") {
+  if (name === "send_to_agent") {
+    writeError(
+      id,
+      MCP_INVALID_PARAMS,
+      'Unknown tool: send_to_agent. Use "send_message" instead.'
+    );
+    return;
+  }
+
+  if (name !== "send_message") {
     writeError(id, MCP_INVALID_PARAMS, `Unknown tool: ${name}`);
     return;
   }
 
-  await handleSendToAgentTool(id, runDir, source, args);
+  await handleSendMessageTool(id, runDir, source, args);
 };
 
 const requestedProtocolVersion = (request: JsonRpcRequest): string =>
@@ -312,7 +323,7 @@ const handleBridgeRequest = async (
           tools: [
             {
               annotations: MUTATING_TOOL_ANNOTATIONS,
-              description: "Send an explicit message to the paired agent.",
+              description: "Send a direct message to the paired agent.",
               inputSchema: {
                 additionalProperties: false,
                 properties: {
@@ -325,12 +336,12 @@ const handleBridgeRequest = async (
                 required: ["target", "message"],
                 type: "object",
               },
-              name: "send_to_agent",
+              name: "send_message",
             },
             {
               annotations: READ_ONLY_TOOL_ANNOTATIONS,
               description:
-                "Inspect the current paired run and pending bridge messages.",
+                "Inspect the current paired run and pending bridge state when delivery looks stuck.",
               inputSchema: {
                 additionalProperties: false,
                 properties: {},
@@ -341,7 +352,7 @@ const handleBridgeRequest = async (
             {
               annotations: RECEIVE_MESSAGES_TOOL_ANNOTATIONS,
               description:
-                "Read and clear pending bridge messages addressed to you.",
+                "Read and clear pending bridge messages addressed to you when delivery looks stuck.",
               inputSchema: {
                 additionalProperties: false,
                 properties: {},
@@ -481,12 +492,24 @@ const consumeFrames = (
     process.stdin.on("error", reject);
   });
 
+const isBridgeWatchEvent = (
+  runDir: string,
+  filename: string | Buffer | null
+): boolean => {
+  if (!filename) {
+    return true;
+  }
+  return filename.toString() === basename(bridgePath(runDir));
+};
+
 export const runBridgeMcpServer = async (
   runDir: string,
   source: Agent
 ): Promise<void> => {
   let channelReady = false;
+  let bridgeWatcher: { close: () => void } | undefined;
   let closed = false;
+  let fallbackSweep: ReturnType<typeof setTimeout> | undefined;
   let flushQueue: Promise<void> = Promise.resolve();
   let requestQueue: Promise<void> = Promise.resolve();
   const queueClaudeFlush = (): Promise<void> => {
@@ -499,39 +522,74 @@ export const runBridgeMcpServer = async (
     flushQueue = flushQueue.then(next, next);
     return flushQueue;
   };
-  const pollClaudeChannel = async (): Promise<void> => {
-    while (!closed) {
-      await queueClaudeFlush();
+
+  const triggerClaudeFlush = (): void => {
+    queueClaudeFlush().catch(() => undefined);
+  };
+
+  const clearClaudeSweep = (): void => {
+    if (!fallbackSweep) {
+      return;
+    }
+    clearTimeout(fallbackSweep);
+    fallbackSweep = undefined;
+  };
+
+  const scheduleClaudeSweep = (): void => {
+    if (!(source === "claude" && channelReady) || closed || fallbackSweep) {
+      return;
+    }
+    fallbackSweep = setTimeout(() => {
+      fallbackSweep = undefined;
       if (closed) {
         return;
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, CHANNEL_POLL_DELAY_MS);
-      });
-    }
+      triggerClaudeFlush();
+      scheduleClaudeSweep();
+    }, CLAUDE_CHANNEL_FALLBACK_SWEEP_MS);
+    fallbackSweep.unref?.();
   };
 
-  process.stdin.resume();
-  const poller = source === "claude" ? pollClaudeChannel() : Promise.resolve();
-  await consumeFrames(
-    (request) => {
-      const handleRequest = async (): Promise<void> => {
-        if (request.method === "notifications/initialized") {
-          channelReady = true;
+  if (source === "claude") {
+    mkdirSync(runDir, { recursive: true });
+    try {
+      bridgeWatcher = watch(runDir, (_eventType, filename) => {
+        if (!isBridgeWatchEvent(runDir, filename)) {
+          return;
         }
-        await handleBridgeRequest(runDir, source, request);
-        await queueClaudeFlush();
-      };
-      requestQueue = requestQueue.then(handleRequest, handleRequest);
-    },
-    () => {
-      closed = true;
+        triggerClaudeFlush();
+      });
+    } catch {
+      bridgeWatcher = undefined;
     }
-  );
-  closed = true;
+  }
+
+  process.stdin.resume();
+  try {
+    await consumeFrames(
+      (request) => {
+        const handleRequest = async (): Promise<void> => {
+          if (request.method === "notifications/initialized") {
+            channelReady = true;
+            scheduleClaudeSweep();
+          }
+          await handleBridgeRequest(runDir, source, request);
+          await queueClaudeFlush();
+        };
+        requestQueue = requestQueue.then(handleRequest, handleRequest);
+      },
+      () => {
+        closed = true;
+      }
+    );
+  } finally {
+    closed = true;
+    bridgeWatcher?.close();
+    clearClaudeSweep();
+  }
+
   await requestQueue;
   await queueClaudeFlush();
-  await poller;
 };
 
 export const bridgeInternals = {

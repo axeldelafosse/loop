@@ -791,9 +791,9 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(primaryPrompt).toContain(
     "create a draft PR or send a follow-up commit to the existing PR"
   );
-  expect(primaryPrompt).toContain("Wait briefly if it arrives");
+  expect(primaryPrompt).not.toContain("Wait briefly if it arrives");
   expect(primaryPrompt).toContain(
-    'Use "send_to_agent" with target: "claude" for Claude-facing messages'
+    'Use "send_message" with target: "claude" for Claude-facing messages'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
@@ -801,7 +801,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain("Wait for Codex to send you a targeted request");
   expect(peerPrompt).not.toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_to_agent" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
+    'Use "send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
   );
   expect(primaryPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
   expect(peerPrompt).toContain("mcp__loop-bridge-repo-123-1__ prefix");
@@ -832,7 +832,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain("ask Claude for a plan review");
   expect(primaryPrompt).toContain("ask the human to review the plan");
   expect(primaryPrompt).toContain(
-    'Use "send_to_agent" with target: "claude" for Claude-facing messages'
+    'Use "send_message" with target: "claude" for Claude-facing messages'
   );
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
@@ -843,7 +843,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(peerPrompt).toContain("human clearly assigns you separate work");
   expect(peerPrompt).not.toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_to_agent" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
+    'Use "send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
   );
   expect(peerPrompt).toContain(
     "If you are answering Codex, use the bridge tools instead of a human-facing reply."
