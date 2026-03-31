@@ -167,6 +167,17 @@ loop upgrade
 
 When running from source (`bun src/loop.ts`), auto-update is disabled — use `git pull` instead.
 
+## Manual proxy reconnect E2E
+
+For a real tmux + real Codex app-server reconnect check, run:
+
+```bash
+bun tests/loop/codex-tmux-proxy.manual.ts --model gpt-5.4-mini
+```
+
+This is a manual harness only. It is not part of `bun test`.
+It restarts against a fresh Codex thread after the app-server drop.
+
 ## Options
 
 - `claude-loop`: shorthand for `loop --claude-only`
