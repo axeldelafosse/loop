@@ -424,7 +424,6 @@ const main = async (): Promise<void> => {
     const resumedAppServer = await startManualAppServer(
       {
         persistentThread: true,
-        resumeThreadId: threadId,
         threadModel: model,
       },
       "[manual e2e] failed to restart the Codex app-server"
