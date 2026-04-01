@@ -12,11 +12,7 @@ import {
   legacyClaudeChannelServerName,
   resolveClaudeChannelServerName,
 } from "./bridge-config";
-import {
-  receiveMessagesStuckGuidance,
-  sendProactiveCodexGuidance,
-  sendToClaudeGuidance,
-} from "./bridge-guidance";
+import { type BridgeTool, quotedBridgeTool } from "./bridge-guidance";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
   CODEX_TMUX_PROXY_SUBCOMMAND,
@@ -155,6 +151,11 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
+const quotedClaudeTmuxBridgeTool = (
+  serverName: string,
+  tool: BridgeTool
+): string => `"mcp__${serverName}__${tool}"`;
+
 const pairedBridgeGuidance = (
   agent: Agent,
   _runId: string,
@@ -162,13 +163,15 @@ const pairedBridgeGuidance = (
 ): string => {
   if (agent === "claude") {
     return [
-      `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
-      sendProactiveCodexGuidance(),
-      receiveMessagesStuckGuidance,
+      `Your bridge MCP server is "${serverName}". Use ${quotedClaudeTmuxBridgeTool(serverName, "send_message")} with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.`,
+      `Use ${quotedClaudeTmuxBridgeTool(serverName, "bridge_status")} or ${quotedClaudeTmuxBridgeTool(serverName, "receive_messages")} only if delivery looks stuck.`,
     ].join("\n");
   }
 
-  return [sendToClaudeGuidance(), receiveMessagesStuckGuidance].join("\n");
+  return [
+    `Use the MCP tool ${quotedBridgeTool(agent, "send_message")} with target: "claude" for Claude-facing messages, not a human-facing message.`,
+    `Use ${quotedBridgeTool(agent, "bridge_status")} or ${quotedBridgeTool(agent, "receive_messages")} only if delivery looks stuck.`,
+  ].join("\n");
 };
 
 const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
@@ -202,7 +205,7 @@ const buildPrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
-    `Your peer is ${peer}. Do the initial pass yourself, then use "send_message" when you want review or targeted help from ${peer}.`,
+    `Your peer is ${peer}. Do the initial pass yourself, then use ${quotedBridgeTool(opts.agent, "send_message")} when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
@@ -245,7 +248,7 @@ const buildInteractivePrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Use "send_message" for review or help once the human gives you a task.`,
+    `Your peer is ${peer}. Use ${quotedBridgeTool(opts.agent, "send_message")} for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(

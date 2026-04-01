@@ -777,6 +777,7 @@ test("runPairedLoop delivers peer messages back to the primary agent", async () 
       "Please verify the implementation details."
     );
     expect(calls[1]?.prompt).toContain("Do not reply to the human.");
+    expect(calls[1]?.prompt).toContain('"mcp__loop_bridge__send_message"');
     expect(calls[2]?.agent).toBe("claude");
     expect(calls[2]?.prompt).toContain(
       "Message from Codex via the loop bridge:"
@@ -862,7 +863,7 @@ test("runPairedLoop preserves claudex reviewers in paired mode", async () => {
       "concrete file paths, commands, and code locations that must change"
     );
     expect(reviewPrompts[1]?.prompt).toContain(
-      'send the actionable notes to Claude with "send_message" using target: "claude"'
+      'send the actionable notes to Claude with "mcp__loop_bridge__send_message" using target: "claude"'
     );
   });
 });
