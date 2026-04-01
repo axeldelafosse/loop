@@ -422,7 +422,7 @@ test("preparePairedOptions loads stored pair ids before planning", async () => {
       expect.arrayContaining([
         expect.stringContaining("mcp_servers.loop-bridge.command="),
         expect.stringContaining("mcp_servers.loop-bridge.args="),
-        'mcp_servers.loop-bridge.tools.send_to_agent.approval_mode="approve"',
+        'mcp_servers.loop-bridge.tools.send_message.approval_mode="approve"',
         'mcp_servers.loop-bridge.tools.bridge_status.approval_mode="approve"',
         'mcp_servers.loop-bridge.tools.receive_messages.approval_mode="approve"',
       ])
@@ -610,7 +610,7 @@ test("runPairedLoop delivers forwarded bridge messages to the target agent", asy
     expect(calls[0]?.prompt).toContain("Please review the Codex output.");
     expect(calls[0]?.prompt).toContain("Do not reply to the human.");
     expect(calls[0]?.prompt).toContain(
-      'Send a message to the other agent with "send_to_agent"'
+      'Send a message to the other agent with "send_message"'
     );
 
     const events = bridgeInternals.readBridgeEvents(runDir);
@@ -785,7 +785,7 @@ test("runPairedLoop delivers peer messages back to the primary agent", async () 
       "Found one change to make before landing this."
     );
     expect(calls[2]?.prompt).toContain(
-      'Send a message to the other agent with "send_to_agent"'
+      'Send a message to the other agent with "send_message"'
     );
   });
 });
@@ -862,7 +862,7 @@ test("runPairedLoop preserves claudex reviewers in paired mode", async () => {
       "concrete file paths, commands, and code locations that must change"
     );
     expect(reviewPrompts[1]?.prompt).toContain(
-      'send the actionable notes to Claude with "send_to_agent" using target: "claude"'
+      'send the actionable notes to Claude with "send_message" using target: "claude"'
     );
   });
 });

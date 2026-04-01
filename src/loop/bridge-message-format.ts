@@ -15,4 +15,4 @@ export const formatCodexBridgeMessage = (
 };
 
 export const normalizeBridgeMessage = (message: string): string =>
-  message.trim().replace(BRIDGE_PREFIX_RE, "").replace(/\s+/g, " ");
+  message.trim().replace(BRIDGE_PREFIX_RE, "").replace(/\s+/g, " ").trim();

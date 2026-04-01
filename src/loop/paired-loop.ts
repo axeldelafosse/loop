@@ -100,14 +100,15 @@ const bridgeGuidance = (agent: Agent): string => {
   const target = agent === "claude" ? "codex" : "claude";
   return [
     "Paired mode:",
-    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_to_agent" with ${bridgeTargetLiteral(target)} when you want ${peer} to act, review, or answer.`,
-    'Do not ask the human to relay messages between agents or answer the human on the other agent\'s behalf. Use "bridge_status" if you need the current bridge state.',
-    'If "bridge_status" shows pending messages addressed to you, call "receive_messages" to read them.',
+    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_message" with ${bridgeTargetLiteral(target)} when you want ${peer} to act, review, or answer.`,
+    'Do not ask the human to relay messages between agents or answer the human on the other agent\'s behalf. Use "bridge_status" only if delivery looks stuck.',
+    'Use "receive_messages" only if "bridge_status" shows pending messages addressed to you and direct delivery looks stuck.',
   ].join("\n");
 };
 
 const bridgeToolGuidance = [
-  'You can use the MCP tools "send_to_agent", "bridge_status", and "receive_messages" for direct Claude/Codex coordination.',
+  'You can use the MCP tools "send_message", "bridge_status", and "receive_messages" for direct Claude/Codex coordination.',
+  'Only use "bridge_status" or "receive_messages" when delivery looks stuck.',
   "Do not ask the human to relay messages between agents.",
 ].join("\n");
 
@@ -116,7 +117,7 @@ const reviewDeliveryGuidance = (reviewer: Agent, opts: Options): string => {
     return "If review is needed, keep the actionable notes in your review body before the final review signal.";
   }
 
-  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with "send_to_agent" using ${bridgeTargetLiteral(opts.agent)} before returning your final review signal.`;
+  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with "send_message" using ${bridgeTargetLiteral(opts.agent)} before returning your final review signal.`;
 };
 
 const reviewToolGuidance = (reviewer: Agent, opts: Options): string =>
@@ -151,19 +152,25 @@ const reviewBridgePrompt = (
     .filter(Boolean)
     .join("\n\n");
 
-const forwardBridgePrompt = (source: Agent, message: string): string =>
+const forwardBridgePrompt = ({
+  message,
+  source,
+}: {
+  message: string;
+  source: Agent;
+}): string =>
   (source === "claude"
     ? [
         formatCodexBridgeMessage(source, message),
         "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-        'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+        'Send a message to the other agent with "send_message" only when you have something useful for them to act on.',
         "Do not acknowledge receipt without new information.",
       ]
     : [
         `Message from ${capitalize(source)} via the loop bridge:`,
         message.trim(),
         "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-        'Send a message to the other agent with "send_to_agent" only when you have something useful for them to act on.',
+        'Send a message to the other agent with "send_message" only when you have something useful for them to act on.',
         "Do not acknowledge receipt without new information.",
       ]
   ).join("\n\n");
@@ -284,7 +291,7 @@ const drainBridge = async (
     const result = await tryRunPairedAgent(
       state,
       message.target,
-      forwardBridgePrompt(message.source, message.message)
+      forwardBridgePrompt(message)
     );
     if (!result) {
       return { deliveredToPrimary };

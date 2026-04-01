@@ -202,14 +202,14 @@ const buildPrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
-    `Your peer is ${peer}. Do the initial pass yourself, then use "send_to_agent" when you want review or targeted help from ${peer}.`,
+    `Your peer is ${peer}. Do the initial pass yourself, then use "send_message" when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
   parts.push(pairedBridgeGuidance(opts.agent, runId, serverName));
   parts.push(pairedWorkflowGuidance(opts, opts.agent));
   parts.push(
-    `${peer} should send a short ready message. Wait briefly if it arrives, then inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
+    `Inspect the repo and start. Ask ${peer} for review once you have concrete work or a specific question.`
   );
   return parts.join("\n\n");
 };
@@ -245,7 +245,7 @@ const buildInteractivePrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Use "send_to_agent" for review or help once the human gives you a task.`,
+    `Your peer is ${peer}. Use "send_message" for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(

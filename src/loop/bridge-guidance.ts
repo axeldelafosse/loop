@@ -10,10 +10,10 @@ export const receiveMessagesStuckGuidance =
   'Use "bridge_status" or "receive_messages" only if delivery looks stuck.';
 
 export const sendToClaudeGuidance = (): string =>
-  `Use "send_to_agent" with ${bridgeTargetLiteral("claude")} for Claude-facing messages, not a human-facing message.`;
+  `Use "send_message" with ${bridgeTargetLiteral("claude")} for Claude-facing messages, not a human-facing message.`;
 
 export const sendProactiveCodexGuidance = (): string =>
-  `Use "send_to_agent" with ${bridgeTargetLiteral("codex")} for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.`;
+  `Use "send_message" with ${bridgeTargetLiteral("codex")} for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.`;
 
 export const claudeChannelInstructions = (): string =>
   [
