@@ -12,11 +12,7 @@ import {
   legacyClaudeChannelServerName,
   resolveClaudeChannelServerName,
 } from "./bridge-config";
-import {
-  bridgeToolName,
-  receiveMessagesStuckGuidance,
-  sendProactiveCodexGuidance,
-} from "./bridge-guidance";
+import { bridgeToolName } from "./bridge-guidance";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
   CODEX_TMUX_PROXY_SUBCOMMAND,
@@ -160,6 +156,11 @@ const quotedBridgeTool = (
   tool: "bridge_status" | "receive_messages" | "send_message"
 ): string => `"${bridgeToolName(agent, tool)}"`;
 
+const quotedClaudeTmuxBridgeTool = (
+  serverName: string,
+  tool: "bridge_status" | "receive_messages" | "send_message"
+): string => `"mcp__${serverName}__${tool}"`;
+
 const pairedBridgeGuidance = (
   agent: Agent,
   _runId: string,
@@ -167,9 +168,8 @@ const pairedBridgeGuidance = (
 ): string => {
   if (agent === "claude") {
     return [
-      `Your bridge MCP server is "${serverName}". All bridge tool calls must use the mcp__${serverName}__ prefix.`,
-      sendProactiveCodexGuidance(),
-      receiveMessagesStuckGuidance,
+      `Your bridge MCP server is "${serverName}". Use ${quotedClaudeTmuxBridgeTool(serverName, "send_message")} with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.`,
+      `Use ${quotedClaudeTmuxBridgeTool(serverName, "bridge_status")} or ${quotedClaudeTmuxBridgeTool(serverName, "receive_messages")} only if delivery looks stuck.`,
     ].join("\n");
   }
 

@@ -799,10 +799,14 @@ test("tmux prompts keep the paired review workflow explicit", () => {
   expect(peerPrompt).toContain("Wait for Codex to send you a targeted request");
   expect(peerPrompt).not.toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
+    'Use "mcp__loop-bridge-repo-123-1__send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
   );
   expect(primaryPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
-  expect(peerPrompt).toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).toContain('"mcp__loop-bridge-repo-123-1__bridge_status"');
+  expect(peerPrompt).toContain(
+    '"mcp__loop-bridge-repo-123-1__receive_messages"'
+  );
 });
 
 test("interactive tmux prompts tell both agents to wait for the human", () => {
@@ -839,13 +843,18 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(peerPrompt).toContain("human clearly assigns you separate work");
   expect(peerPrompt).not.toContain('"reply"');
   expect(peerPrompt).toContain(
-    'Use "send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
+    'Use "mcp__loop-bridge-repo-123-1__send_message" with target: "codex" for Codex-facing messages, including replies to inbound Codex channel messages; do not send Codex-facing responses as a human-facing message.'
+  );
+  expect(peerPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).toContain('"mcp__loop-bridge-repo-123-1__bridge_status"');
+  expect(peerPrompt).toContain(
+    '"mcp__loop-bridge-repo-123-1__receive_messages"'
   );
   expect(peerPrompt).toContain(
     "If you are answering Codex, use the bridge tools instead of a human-facing reply."
   );
   expect(primaryPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
-  expect(peerPrompt).toContain("mcp__loop-bridge-repo-123-1__ prefix");
+  expect(peerPrompt).not.toContain("mcp__loop-bridge-repo-123-1__ prefix");
 });
 
 test("runInTmux auto-confirms Claude startup prompts in paired mode", async () => {
