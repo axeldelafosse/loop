@@ -3,6 +3,7 @@ import {
   acknowledgeBridgeDelivery,
   readNextPendingBridgeMessage,
 } from "./bridge-dispatch";
+import { bridgeToolName } from "./bridge-guidance";
 import { formatCodexBridgeMessage } from "./bridge-message-format";
 import { getLastClaudeSessionId } from "./claude-sdk-server";
 import { getLastCodexThreadId } from "./codex-app-server";
@@ -47,6 +48,7 @@ import type {
 import { hasSignal } from "./utils";
 
 const MAX_BRIDGE_HOPS = 12;
+type BridgeTool = "bridge_status" | "receive_messages" | "send_message";
 
 interface PairedState {
   manifest: RunManifest;
@@ -100,30 +102,34 @@ const bridgeGuidance = (agent: Agent): string => {
   const target = agent === "claude" ? "codex" : "claude";
   return [
     "Paired mode:",
-    `You are in a persistent Claude/Codex pair. Use the MCP tool "send_message" with ${bridgeTargetLiteral(target)} when you want ${peer} to act, review, or answer.`,
-    'Do not ask the human to relay messages between agents or answer the human on the other agent\'s behalf. Use "bridge_status" only if delivery looks stuck.',
-    'Use "receive_messages" only if "bridge_status" shows pending messages addressed to you and direct delivery looks stuck.',
+    `You are in a persistent Claude/Codex pair. Use the MCP tool ${quotedBridgeTool(agent, "send_message")} with ${bridgeTargetLiteral(target)} when you want ${peer} to act, review, or answer.`,
+    `Do not ask the human to relay messages between agents or answer the human on the other agent's behalf. Use ${quotedBridgeTool(agent, "bridge_status")} only if delivery looks stuck.`,
+    `Use ${quotedBridgeTool(agent, "receive_messages")} only if ${quotedBridgeTool(agent, "bridge_status")} shows pending messages addressed to you and direct delivery looks stuck.`,
   ].join("\n");
 };
 
-const bridgeToolGuidance = [
-  'You can use the MCP tools "send_message", "bridge_status", and "receive_messages" for direct Claude/Codex coordination.',
-  'Only use "bridge_status" or "receive_messages" when delivery looks stuck.',
-  "Do not ask the human to relay messages between agents.",
-].join("\n");
+const quotedBridgeTool = (agent: Agent, tool: BridgeTool): string =>
+  `"${bridgeToolName(agent, tool)}"`;
+
+const bridgeToolGuidance = (agent: Agent): string =>
+  [
+    `You can use the MCP tools ${quotedBridgeTool(agent, "send_message")}, ${quotedBridgeTool(agent, "bridge_status")}, and ${quotedBridgeTool(agent, "receive_messages")} for direct Claude/Codex coordination.`,
+    `Only use ${quotedBridgeTool(agent, "bridge_status")} or ${quotedBridgeTool(agent, "receive_messages")} when delivery looks stuck.`,
+    "Do not ask the human to relay messages between agents.",
+  ].join("\n");
 
 const reviewDeliveryGuidance = (reviewer: Agent, opts: Options): string => {
   if (reviewer === opts.agent) {
     return "If review is needed, keep the actionable notes in your review body before the final review signal.";
   }
 
-  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with "send_message" using ${bridgeTargetLiteral(opts.agent)} before returning your final review signal.`;
+  return `If review is needed, send the actionable notes to ${capitalize(opts.agent)} with ${quotedBridgeTool(reviewer, "send_message")} using ${bridgeTargetLiteral(opts.agent)} before returning your final review signal.`;
 };
 
 const reviewToolGuidance = (reviewer: Agent, opts: Options): string =>
   reviewer === opts.agent
     ? "Use the review body itself for follow-up notes. No bridge message is needed for a self-review."
-    : bridgeToolGuidance;
+    : bridgeToolGuidance(reviewer);
 
 const formatSelfReviewNotes = (
   failures: ReviewFailure[],
@@ -158,22 +164,26 @@ const forwardBridgePrompt = ({
 }: {
   message: string;
   source: Agent;
-}): string =>
-  (source === "claude"
-    ? [
-        formatCodexBridgeMessage(source, message),
-        "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-        'Send a message to the other agent with "send_message" only when you have something useful for them to act on.',
-        "Do not acknowledge receipt without new information.",
-      ]
-    : [
-        `Message from ${capitalize(source)} via the loop bridge:`,
-        message.trim(),
-        "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
-        'Send a message to the other agent with "send_message" only when you have something useful for them to act on.',
-        "Do not acknowledge receipt without new information.",
-      ]
+}): string => {
+  const agent = source === "claude" ? "codex" : "claude";
+  const replyGuidance = `Send a message to the other agent with ${quotedBridgeTool(agent, "send_message")} only when you have something useful for them to act on.`;
+  return (
+    source === "claude"
+      ? [
+          formatCodexBridgeMessage(source, message),
+          "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
+          replyGuidance,
+          "Do not acknowledge receipt without new information.",
+        ]
+      : [
+          `Message from ${capitalize(source)} via the loop bridge:`,
+          message.trim(),
+          "Treat this as direct agent-to-agent coordination. Do not reply to the human.",
+          replyGuidance,
+          "Do not acknowledge receipt without new information.",
+        ]
   ).join("\n\n");
+};
 
 const updateIds = (state: PairedState): void => {
   const next = touchRunManifest(

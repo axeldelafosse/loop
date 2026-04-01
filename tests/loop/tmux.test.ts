@@ -792,9 +792,7 @@ test("tmux prompts keep the paired review workflow explicit", () => {
     "create a draft PR or send a follow-up commit to the existing PR"
   );
   expect(primaryPrompt).not.toContain("Wait briefly if it arrives");
-  expect(primaryPrompt).toContain(
-    'Use "send_message" with target: "claude" for Claude-facing messages'
-  );
+  expect(primaryPrompt).toContain('"mcp__loop_bridge__send_message"');
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("You are the reviewer/support agent.");
   expect(peerPrompt).toContain("Do not take over the task or create the PR");
@@ -831,9 +829,7 @@ test("interactive tmux prompts tell both agents to wait for the human", () => {
   expect(primaryPrompt).toContain("If the human asks for plan mode");
   expect(primaryPrompt).toContain("ask Claude for a plan review");
   expect(primaryPrompt).toContain("ask the human to review the plan");
-  expect(primaryPrompt).toContain(
-    'Use "send_message" with target: "claude" for Claude-facing messages'
-  );
+  expect(primaryPrompt).toContain('"mcp__loop_bridge__send_message"');
   expect(primaryPrompt).toContain("worktree isolation");
   expect(peerPrompt).toContain("No task has been assigned yet.");
   expect(peerPrompt).toContain(

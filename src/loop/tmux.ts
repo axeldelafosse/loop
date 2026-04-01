@@ -13,9 +13,9 @@ import {
   resolveClaudeChannelServerName,
 } from "./bridge-config";
 import {
+  bridgeToolName,
   receiveMessagesStuckGuidance,
   sendProactiveCodexGuidance,
-  sendToClaudeGuidance,
 } from "./bridge-guidance";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
@@ -155,6 +155,11 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
+const quotedBridgeTool = (
+  agent: Agent,
+  tool: "bridge_status" | "receive_messages" | "send_message"
+): string => `"${bridgeToolName(agent, tool)}"`;
+
 const pairedBridgeGuidance = (
   agent: Agent,
   _runId: string,
@@ -168,7 +173,10 @@ const pairedBridgeGuidance = (
     ].join("\n");
   }
 
-  return [sendToClaudeGuidance(), receiveMessagesStuckGuidance].join("\n");
+  return [
+    `Use the MCP tool ${quotedBridgeTool(agent, "send_message")} with target: "claude" for Claude-facing messages, not a human-facing message.`,
+    `Use ${quotedBridgeTool(agent, "bridge_status")} or ${quotedBridgeTool(agent, "receive_messages")} only if delivery looks stuck.`,
+  ].join("\n");
 };
 
 const pairedWorkflowGuidance = (opts: Options, agent: Agent): string => {
@@ -202,7 +210,7 @@ const buildPrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     `Task:\n${task.trim()}`,
-    `Your peer is ${peer}. Do the initial pass yourself, then use "send_message" when you want review or targeted help from ${peer}.`,
+    `Your peer is ${peer}. Do the initial pass yourself, then use ${quotedBridgeTool(opts.agent, "send_message")} when you want review or targeted help from ${peer}.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(SPAWN_TEAM_WITH_WORKTREE_ISOLATION);
@@ -245,7 +253,7 @@ const buildInteractivePrimaryPrompt = (
   const parts = [
     `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`,
     "No task has been assigned yet.",
-    `Your peer is ${peer}. Use "send_message" for review or help once the human gives you a task.`,
+    `Your peer is ${peer}. Use ${quotedBridgeTool(opts.agent, "send_message")} for review or help once the human gives you a task.`,
   ];
   appendProofPrompt(parts, opts.proof);
   parts.push(
