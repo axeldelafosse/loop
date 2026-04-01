@@ -3,7 +3,7 @@ import {
   acknowledgeBridgeDelivery,
   readNextPendingBridgeMessage,
 } from "./bridge-dispatch";
-import { bridgeToolName } from "./bridge-guidance";
+import { quotedBridgeTool } from "./bridge-guidance";
 import { formatCodexBridgeMessage } from "./bridge-message-format";
 import { getLastClaudeSessionId } from "./claude-sdk-server";
 import { getLastCodexThreadId } from "./codex-app-server";
@@ -48,7 +48,6 @@ import type {
 import { hasSignal } from "./utils";
 
 const MAX_BRIDGE_HOPS = 12;
-type BridgeTool = "bridge_status" | "receive_messages" | "send_message";
 
 interface PairedState {
   manifest: RunManifest;
@@ -107,9 +106,6 @@ const bridgeGuidance = (agent: Agent): string => {
     `Use ${quotedBridgeTool(agent, "receive_messages")} only if ${quotedBridgeTool(agent, "bridge_status")} shows pending messages addressed to you and direct delivery looks stuck.`,
   ].join("\n");
 };
-
-const quotedBridgeTool = (agent: Agent, tool: BridgeTool): string =>
-  `"${bridgeToolName(agent, tool)}"`;
 
 const bridgeToolGuidance = (agent: Agent): string =>
   [

@@ -12,7 +12,7 @@ import {
   legacyClaudeChannelServerName,
   resolveClaudeChannelServerName,
 } from "./bridge-config";
-import { bridgeToolName } from "./bridge-guidance";
+import { type BridgeTool, quotedBridgeTool } from "./bridge-guidance";
 import { getCodexAppServerUrl, getLastCodexThreadId } from "./codex-app-server";
 import {
   CODEX_TMUX_PROXY_SUBCOMMAND,
@@ -151,14 +151,9 @@ const appendProofPrompt = (parts: string[], proof: string): void => {
   parts.push(`Proof requirements:\n${trimmed}`);
 };
 
-const quotedBridgeTool = (
-  agent: Agent,
-  tool: "bridge_status" | "receive_messages" | "send_message"
-): string => `"${bridgeToolName(agent, tool)}"`;
-
 const quotedClaudeTmuxBridgeTool = (
   serverName: string,
-  tool: "bridge_status" | "receive_messages" | "send_message"
+  tool: BridgeTool
 ): string => `"mcp__${serverName}__${tool}"`;
 
 const pairedBridgeGuidance = (

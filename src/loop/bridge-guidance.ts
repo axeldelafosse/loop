@@ -1,7 +1,7 @@
 import { BRIDGE_SERVER, CLAUDE_CHANNEL_USER } from "./bridge-constants";
 import type { Agent } from "./types";
 
-type BridgeTool = "bridge_status" | "receive_messages" | "send_message";
+export type BridgeTool = "bridge_status" | "receive_messages" | "send_message";
 
 const bridgeTargetLiteral = (agent: Agent): string => `target: "${agent}"`;
 const codexBridgeToolName = (tool: BridgeTool): string =>
@@ -9,6 +9,9 @@ const codexBridgeToolName = (tool: BridgeTool): string =>
 
 export const bridgeToolName = (agent: Agent, tool: BridgeTool): string =>
   agent === "claude" ? tool : codexBridgeToolName(tool);
+
+export const quotedBridgeTool = (agent: Agent, tool: BridgeTool): string =>
+  `"${bridgeToolName(agent, tool)}"`;
 
 export const bridgeStatusStuckGuidance =
   'Use "bridge_status" only when direct delivery appears stuck.';
