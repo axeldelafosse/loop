@@ -327,7 +327,7 @@ const prepareRunState = (opts: Options, cwd: string): PairedState => {
     manifest,
     options: opts,
     storage,
-    usedResume: { claude: false, codex: false },
+    usedResume: { claude: false, codex: false, copilot: false },
   };
 };
 

@@ -1,6 +1,6 @@
 # loop
 
-Dead-simple Bun CLI that runs `codex` and `claude` in a loop. Uses `tmux` to run the interactive TUIs side-by-side. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
+Dead-simple Bun CLI that runs `codex`, `claude`, and (in single-agent mode) `copilot` in a loop. Uses `tmux` to run the interactive TUIs side-by-side. Codex and Claude talk to each other through the [Codex App Server](https://developers.openai.com/codex/app-server) and [Claude Code Channels](https://code.claude.com/docs/en/channels-reference).
 
 Install:
 ```bash
@@ -24,6 +24,12 @@ By default `loop` uses Codex as the main worker and Claude as a reviewer. To run
 loop --agent claude --tmux
 ```
 
+To run [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli) as the worker (single-agent mode only, see below):
+
+```bash
+copilot-loop --proof "Use {skill} to verify your changes" "Implement {feature}"
+```
+
 ## [Agent-to-agent pair programming](https://axeldelafosse.com/blog/agent-to-agent-pair-programming)
 
 One agent is the main worker, the other acts as a reviewer. They work together on a PLAN.md and iterate until they both agree the task is done. Then the main worker creates a draft PR.
@@ -32,14 +38,15 @@ One agent is the main worker, the other acts as a reviewer. They work together o
 
 This _is_ a "meta agent loop" to help coding agents become long-running agents. Stop baby sitting your agents: let them iterate on tasks with clear proof requirements until they are done. Run multiple reviews to continue the feedback loop.
 
-This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loop` leverages existing agent harnesses like `codex` and `claude`, with their own implementation of the "agent teams" orchestration. The models are getting better very quickly and they are highly optimized for their respective harnesses.
+This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loop` leverages existing agent harnesses like `codex`, `claude`, and `copilot`, with their own implementation of the "agent teams" orchestration (or, for Copilot, plain non-interactive `-p` execution). The models are getting better very quickly and they are highly optimized for their respective harnesses.
 
 ## What it does
 
-- Runs in paired mode by default: one agent does the work, the other stays available for review/support
+- Runs in paired mode by default: one agent (Claude or Codex) does the work, the other stays available for review/support
 - Keeps Claude and Codex sessions persistent across iterations and bridges messages between them
 - Stores paired run state under `~/.loop/runs/...` so runs can be resumed by run id or session/thread id
 - Loops until the task is proven done, then runs reviews and creates a draft PR
+- Optionally runs [Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli) (`--agent copilot` / `--copilot-only` / `copilot-loop`) as a third, single-agent-mode-only worker — see [Copilot CLI support](#copilot-cli-support)
 
 ## Setup
 
@@ -48,7 +55,7 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 - Use Docker or [Lume](https://cua.ai/docs/lume/guide/getting-started/introduction) to create a sandbox VM
 - Install nvm, node, npm and bun
 - If you plan to use Playwright: `bun x playwright install chromium`
-- Install [Codex](https://github.com/openai/codex) and [Claude](https://code.claude.com/docs/en/overview#get-started)
+- Install [Codex](https://github.com/openai/codex) and [Claude](https://code.claude.com/docs/en/overview#get-started), and/or [Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli)
 - Install Claude "Agent teams" and Codex "Multi-agents" experimental features
 - Install git and gh CLI
 - Create a GitHub fine-grained personal access token
@@ -57,7 +64,7 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 
 ## Requirements
 
-- `codex` and/or `claude` installed and logged in
+- `codex`, `claude`, and/or `copilot` installed and logged in
 - [tmux](https://github.com/tmux/tmux) if you want to run the TUIs side-by-side
 - [Bun](https://bun.com) to build/run from source (prebuilt binaries do not require Bun)
 
@@ -67,7 +74,7 @@ This _is not_ an "agent harness" and the goal isn't to re-invent the wheel: `loo
 curl -fsSL https://raw.githubusercontent.com/axeldelafosse/loop/main/install.sh | bash
 ```
 
-Installer currently supports macOS and Linux and installs `loop`, `claude-loop`, and `codex-loop` to `~/.local/bin` by default.
+Installer currently supports macOS and Linux and installs `loop`, `claude-loop`, `codex-loop`, and `copilot-loop` to `~/.local/bin` by default.
 
 ## Quick start
 
@@ -114,6 +121,29 @@ Each paired run gets a run id and a manifest under `~/.loop/runs/<repo-id>/<run-
 - In single-agent mode, `--session <id>` still works as a raw Claude/Codex session resume flag.
 - When combined with `--worktree` or `--tmux`, resumed paired runs keep the same run id so worktree and tmux naming stay aligned.
 
+## Copilot CLI support
+
+`loop` can also drive [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli) (`copilot`) as a worker or reviewer:
+
+```bash
+# single-agent mode: copilot for work, review, and plan review
+loop --copilot-only --proof "Use {skill} to verify your changes" "Implement {feature}"
+
+# shorthand
+copilot-loop --proof "Use {skill} to verify your changes" "Implement {feature}"
+
+# use copilot as a one-off reviewer for a claude/codex worker
+loop --proof "Use {skill} to verify your changes" "Implement {feature}" --review copilot
+```
+
+Copilot CLI runs non-interactively via `copilot -p <prompt> --allow-all-tools --allow-all-paths --allow-all-urls --output-format json --model <model>`, the same way `loop` shells out to legacy `codex exec` / `claude -p`.
+
+**Copilot-specific flags:**
+- `--copilot-model <model>` (default: `auto`, i.e. Copilot picks the best available model for your plan)
+- `--copilot-reviewer-model <model>` (used when Copilot is acting as a reviewer; falls back to `--copilot-model`)
+
+**Known limitation:** unlike Claude and Codex, Copilot CLI does not currently expose a persistent app-server/channels protocol `loop` can bridge against, so **`--agent copilot` always disables paired mode** (`loop` runs it standalone, one turn at a time, the same way `--claude-only`/`--codex-only` work). Copilot can still be used as a `--review` / `--review-plan` reviewer for a Claude or Codex worker, and Claude/Codex can still review a Copilot worker's output.
+
 ## Install globally (symlink)
 
 ```bash
@@ -121,7 +151,7 @@ bun run install:global
 loop --help
 ```
 
-This creates `loop`, `claude-loop`, and `codex-loop` in `~/.local/bin` on Unix, and `loop.exe` plus `claude-loop.cmd`/`codex-loop.cmd` on Windows.
+This creates `loop`, `claude-loop`, `codex-loop`, and `copilot-loop` in `~/.local/bin` on Unix, and `loop.exe` plus `claude-loop.cmd`/`codex-loop.cmd`/`copilot-loop.cmd` on Windows.
 
 If `loop` is not found, add this to `~/.zshrc`:
 

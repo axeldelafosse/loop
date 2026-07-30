@@ -4,6 +4,7 @@ import type { ValueFlag } from "./types";
 export const DEFAULT_DONE_SIGNAL = "<promise>DONE</promise>";
 export const DEFAULT_CODEX_MODEL = "gpt-5.4";
 export const DEFAULT_CLAUDE_MODEL = "opus";
+export const DEFAULT_COPILOT_MODEL = "auto";
 export const DEFAULT_MAX_ITERATIONS = 20;
 export const LOOP_VERSION = pkg.version;
 
@@ -18,11 +19,13 @@ Usage:
   loop upgrade                             Alias for update
   claude-loop [options] [prompt]           Alias for: loop --claude-only
   codex-loop [options] [prompt]            Alias for: loop --codex-only
+  copilot-loop [options] [prompt]          Alias for: loop --copilot-only
 
 Options:
-  -a, --agent <claude|codex>               Agent CLI to run (default: codex)
+  -a, --agent <claude|codex|copilot>       Agent CLI to run (default: codex)
   --claude-only                            Use Claude for work, review, and plan review
   --codex-only                             Use Codex for work, review, and plan review
+  --copilot-only                           Use Copilot CLI for work, review, and plan review (single-agent mode only)
   -p, --prompt <text|.md file>             Prompt text or path to a .md prompt file
   -m, --max-iterations <number>            Max loops (default: ${DEFAULT_MAX_ITERATIONS})
   -d, --done <signal>                      Done signal (default: <promise>DONE</promise>)
@@ -30,9 +33,11 @@ Options:
   --codex-model <model>                    Override codex model (default: ${DEFAULT_CODEX_MODEL})
   --codex-reviewer-model <model>           Override codex review model
   --claude-reviewer-model <model>          Override claude review model
+  --copilot-model <model>                  Override copilot model (default: ${DEFAULT_COPILOT_MODEL})
+  --copilot-reviewer-model <model>         Override copilot review model
   --format <pretty|raw>                    Log format (default: pretty)
-  --review [claude|codex|claudex]          Review on done (default: claudex)
-  --review-plan [other|claude|codex|none]  Review PLAN.md after plain-text planning (default: other)
+  --review [claude|codex|copilot|claudex]  Review on done (default: claudex)
+  --review-plan [other|claude|codex|copilot|none]  Review PLAN.md after plain-text planning (default: other)
   --run-id <id>                            Reuse a specific run id; resumes paired runs in paired mode
   --session <id>                           Resume from a paired run id or raw session/thread ID
   --tmux                                   Run in tmux (paired mode opens Claude/Codex side-by-side; no prompt/proof starts interactive TUIs)
@@ -63,6 +68,8 @@ export const VALUE_FLAGS: Record<string, ValueFlag> = {
   "--codex-model": "codexModel",
   "--codex-reviewer-model": "codexReviewerModel",
   "--claude-reviewer-model": "claudeReviewerModel",
+  "--copilot-model": "copilotModel",
+  "--copilot-reviewer-model": "copilotReviewerModel",
   "--format": "format",
   "--run-id": "runId",
   "--session": "session",

@@ -230,6 +230,42 @@ test("parseArgs sets agent/review/reviewPlan to codex with --codex-only", () => 
   expect(opts.reviewPlan).toBe("codex");
 });
 
+test("parseArgs sets agent/review/reviewPlan to copilot with --copilot-only", () => {
+  const opts = parseArgs(["--copilot-only", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("copilot");
+  expect(opts.review).toBe("copilot");
+  expect(opts.reviewPlan).toBe("copilot");
+  expect(opts.pairedMode).toBe(false);
+});
+
+test("parseArgs disables paired mode when --agent copilot is used directly", () => {
+  const opts = parseArgs(["--agent", "copilot", "--proof", "verify"]);
+
+  expect(opts.agent).toBe("copilot");
+  expect(opts.pairedMode).toBe(false);
+});
+
+test("parseArgs throws on conflicting --copilot-only and --codex-only", () => {
+  expect(() => parseArgs(["--copilot-only", "--codex-only"])).toThrow(
+    CONFLICT_ONLY_MODE_ERROR
+  );
+});
+
+test("parseArgs accepts --copilot-model and --copilot-reviewer-model", () => {
+  const opts = parseArgs([
+    "--copilot-only",
+    "--copilot-model",
+    "custom-copilot-model",
+    "--copilot-reviewer-model=copilot-review",
+    "--proof",
+    "verify",
+  ]);
+
+  expect(opts.copilotModel).toBe("custom-copilot-model");
+  expect(opts.copilotReviewerModel).toBe("copilot-review");
+});
+
 test("parseArgs throws on conflicting --claude-only and --codex-only", () => {
   expect(() => parseArgs(["--claude-only", "--codex-only"])).toThrow(
     CONFLICT_ONLY_MODE_ERROR

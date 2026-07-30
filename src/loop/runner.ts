@@ -21,7 +21,7 @@ import {
   useAppServer,
 } from "./codex-app-server";
 import { createCodexRenderer } from "./codex-render";
-import { DEFAULT_CLAUDE_MODEL } from "./constants";
+import { DEFAULT_CLAUDE_MODEL, DEFAULT_COPILOT_MODEL } from "./constants";
 import { DETACH_CHILD_PROCESS, killChildProcess } from "./process";
 import type { Agent, Options, RunResult } from "./types";
 
@@ -149,6 +149,24 @@ export const buildCommand = (
     return { args, cmd: "claude" };
   }
 
+  if (agent === "copilot") {
+    const args = [
+      "-p",
+      prompt,
+      "--allow-all-tools",
+      "--allow-all-paths",
+      "--allow-all-urls",
+      "--output-format",
+      "json",
+      "--model",
+      model,
+    ];
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    }
+    return { args, cmd: "copilot" };
+  }
+
   const args = [
     "exec",
     "--json",
@@ -174,6 +192,14 @@ const resolveModel = (
       : opts.codexModel;
   }
 
+  if (agent === "copilot") {
+    return kind === "review"
+      ? (opts.copilotReviewerModel ??
+          opts.copilotModel ??
+          DEFAULT_COPILOT_MODEL)
+      : (opts.copilotModel ?? DEFAULT_COPILOT_MODEL);
+  }
+
   return kind === "review"
     ? (opts.claudeReviewerModel ?? DEFAULT_CLAUDE_MODEL)
     : DEFAULT_CLAUDE_MODEL;
@@ -193,6 +219,7 @@ const eventMessage = (line: string): string => {
 
   try {
     const event = JSON.parse(line) as {
+      data?: { content?: string };
       item?: {
         content?: Array<{ text?: string }>;
         text?: string;
@@ -222,6 +249,10 @@ const eventMessage = (line: string): string => {
         .map((part) => part.text ?? "")
         .join("")
         .trim();
+    }
+
+    if (event.type === "assistant.message") {
+      return (event.data?.content ?? "").trim();
     }
 
     if (event.type === "result" && typeof event.result === "string") {
@@ -561,6 +592,9 @@ const runAgentWithKind = (
 ): Promise<RunResult> => {
   if (agent === "codex") {
     return runCodexAgent(prompt, opts, sessionId, kind);
+  }
+  if (agent === "copilot") {
+    return runnerState.runLegacyAgent("copilot", prompt, opts, sessionId, kind);
   }
   return runClaudeAgent(prompt, opts, sessionId, kind);
 };

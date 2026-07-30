@@ -252,6 +252,43 @@ test("buildCommand uses the provided Claude model", () => {
   expect(command.args[modelArgIndex + 1]).toBe("sonnet-review");
 });
 
+test("buildCommand builds a non-interactive copilot invocation", () => {
+  const command = buildCommand(
+    "copilot",
+    "summarize the issue",
+    "claude-sonnet-4.5"
+  );
+
+  expect(command.cmd).toBe("copilot");
+  expect(command.args).toEqual(
+    expect.arrayContaining([
+      "-p",
+      "summarize the issue",
+      "--allow-all-tools",
+      "--allow-all-paths",
+      "--allow-all-urls",
+      "--output-format",
+      "json",
+      "--model",
+      "claude-sonnet-4.5",
+    ])
+  );
+  expect(command.args).not.toContain("--resume");
+});
+
+test("buildCommand resumes a copilot session when a sessionId is provided", () => {
+  const command = buildCommand(
+    "copilot",
+    "continue",
+    "claude-sonnet-4.5",
+    "copilot-session-1"
+  );
+
+  const resumeIndex = command.args.indexOf("--resume");
+  expect(resumeIndex).toBeGreaterThan(-1);
+  expect(command.args[resumeIndex + 1]).toBe("copilot-session-1");
+});
+
 test("buildCommand carries Codex bridge approval config for legacy exec", () => {
   const codexMcpConfigArgs = buildCodexBridgeConfigArgs(
     "/tmp/loop-run",
@@ -286,6 +323,20 @@ test("runAgent honors CODEX_TRANSPORT=exec and uses legacy codex exec", async ()
   expect(startAppServer).not.toHaveBeenCalled();
   expect(runCodexTurn).not.toHaveBeenCalled();
   expect(useAppServer).not.toHaveBeenCalled();
+});
+
+test("runAgent always runs copilot through the legacy spawn path", async () => {
+  runLegacyAgent.mockResolvedValue(makeResult({ parsed: "copilot done" }));
+
+  const result = await runAgent("copilot", "say hello", makeOptions());
+
+  expect(result.exitCode).toBe(0);
+  expect(result.parsed).toBe("copilot done");
+  expect(runLegacyAgent).toHaveBeenCalledTimes(1);
+  expect(runLegacyAgent.mock.calls[0]?.[0]).toBe("copilot");
+  expect(startAppServer).not.toHaveBeenCalled();
+  expect(runCodexTurn).not.toHaveBeenCalled();
+  expect(startClaudeSdk).not.toHaveBeenCalled();
 });
 
 test("runAgent propagates turn/completed success exit code", async () => {

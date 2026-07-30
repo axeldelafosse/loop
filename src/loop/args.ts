@@ -1,6 +1,7 @@
 import { env } from "bun";
 import {
   DEFAULT_CODEX_MODEL,
+  DEFAULT_COPILOT_MODEL,
   DEFAULT_DONE_SIGNAL,
   DEFAULT_MAX_ITERATIONS,
   HELP,
@@ -22,7 +23,7 @@ const ONLY_MODE_CONFLICT_ERROR =
 const INVALID_RUN_ID_ERROR = "Invalid --run-id value: cannot be empty";
 
 const parseAgent = (value: string): Agent => {
-  if (value === "claude" || value === "codex") {
+  if (value === "claude" || value === "codex" || value === "copilot") {
     return value;
   }
   throw new Error(`Invalid --agent value: ${value}`);
@@ -36,7 +37,12 @@ const parseFormat = (value: string): Format => {
 };
 
 const parseReviewValue = (value: string): ReviewMode => {
-  if (value === "claude" || value === "codex" || value === "claudex") {
+  if (
+    value === "claude" ||
+    value === "codex" ||
+    value === "copilot" ||
+    value === "claudex"
+  ) {
     return value;
   }
   throw new Error(`Invalid --review value: ${value}`);
@@ -49,6 +55,7 @@ const maybeParsePlanReviewValue = (
     value === "other" ||
     value === "claude" ||
     value === "codex" ||
+    value === "copilot" ||
     value === "none"
   ) {
     return value;
@@ -88,6 +95,10 @@ const applyValueFlag = (
     case "agent":
       if (!onlyAgent) {
         opts.agent = parseAgent(value);
+        if (opts.agent === "copilot") {
+          // Copilot CLI has no paired app-server/channels bridge yet; run standalone.
+          opts.pairedMode = false;
+        }
       }
       return;
     case "prompt":
@@ -128,6 +139,18 @@ const applyValueFlag = (
         "Invalid --claude-reviewer-model value: cannot be empty"
       );
       return;
+    case "copilotModel":
+      opts.copilotModel = requireTrimmedValue(
+        value,
+        "Invalid --copilot-model value: cannot be empty"
+      );
+      return;
+    case "copilotReviewerModel":
+      opts.copilotReviewerModel = requireTrimmedValue(
+        value,
+        "Invalid --copilot-reviewer-model value: cannot be empty"
+      );
+      return;
     case "session":
       opts.sessionId = requireTrimmedValue(
         value,
@@ -163,6 +186,9 @@ const parseOnlyModeFlag = (arg: string): Agent | undefined => {
   if (arg === "--codex-only") {
     return "codex";
   }
+  if (arg === "--copilot-only") {
+    return "copilot";
+  }
   return undefined;
 };
 
@@ -187,7 +213,12 @@ const parseReviewArg = (
     }
 
     const next = argv[index + 1];
-    if (next === "claude" || next === "codex" || next === "claudex") {
+    if (
+      next === "claude" ||
+      next === "codex" ||
+      next === "copilot" ||
+      next === "claudex"
+    ) {
       return index + 1;
     }
 
@@ -205,7 +236,12 @@ const parseReviewArg = (
   }
 
   const next = argv[index + 1];
-  if (next === "claude" || next === "codex" || next === "claudex") {
+  if (
+    next === "claude" ||
+    next === "codex" ||
+    next === "copilot" ||
+    next === "claudex"
+  ) {
     opts.review = next;
     return index + 1;
   }
@@ -306,10 +342,24 @@ const parseModelArg = (
     );
     return index + 1;
   }
+  if (arg.startsWith("--copilot-model=")) {
+    applyValueFlag("copilotModel", arg.slice("--copilot-model=".length), opts);
+    return index + 1;
+  }
+  if (arg.startsWith("--copilot-reviewer-model=")) {
+    applyValueFlag(
+      "copilotReviewerModel",
+      arg.slice("--copilot-reviewer-model=".length),
+      opts
+    );
+    return index + 1;
+  }
   if (
     arg === "--codex-model" ||
     arg === "--codex-reviewer-model" ||
-    arg === "--claude-reviewer-model"
+    arg === "--claude-reviewer-model" ||
+    arg === "--copilot-model" ||
+    arg === "--copilot-reviewer-model"
   ) {
     applyValueFlag(
       VALUE_FLAGS[arg],
@@ -416,6 +466,7 @@ export const parseArgs = (argv: string[]): Options => {
     format: "pretty",
     maxIterations: DEFAULT_MAX_ITERATIONS,
     codexModel: env.LOOP_CODEX_MODEL ?? DEFAULT_CODEX_MODEL,
+    copilotModel: env.LOOP_COPILOT_MODEL ?? DEFAULT_COPILOT_MODEL,
     pairedMode: true,
     review: "claudex",
     resumeRunId: undefined,

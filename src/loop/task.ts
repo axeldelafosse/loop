@@ -21,7 +21,13 @@ const resolvePlanReviewer = (
     return undefined;
   }
   if (mode === "other") {
-    return agent === "codex" ? "claude" : "codex";
+    if (agent === "codex") {
+      return "claude";
+    }
+    if (agent === "copilot") {
+      return "claude";
+    }
+    return "codex";
   }
   return mode;
 };

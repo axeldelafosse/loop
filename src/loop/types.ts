@@ -1,4 +1,4 @@
-export type Agent = "claude" | "codex";
+export type Agent = "claude" | "codex" | "copilot";
 export type Format = "pretty" | "raw";
 export type ReviewMode = Agent | "claudex";
 export type PlanReviewMode = Agent | "other" | "none";
@@ -25,6 +25,8 @@ export type ValueFlag =
   | "codexModel"
   | "codexReviewerModel"
   | "claudeReviewerModel"
+  | "copilotModel"
+  | "copilotReviewerModel"
   | "format"
   | "runId"
   | "session";
@@ -37,6 +39,8 @@ export interface Options {
   codexMcpConfigArgs?: string[];
   codexModel: string;
   codexReviewerModel?: string;
+  copilotModel?: string;
+  copilotReviewerModel?: string;
   doneSignal: string;
   format: Format;
   maxIterations: number;

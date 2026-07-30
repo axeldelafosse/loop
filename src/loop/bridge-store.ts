@@ -45,7 +45,7 @@ export interface BridgeStatus {
   codexThreadId: string;
   hasCodexRemote: boolean;
   hasTmuxSession: boolean;
-  pending: { claude: number; codex: number };
+  pending: { claude: number; codex: number; copilot: number };
   runId: string;
   state: string;
   status: string;
@@ -222,7 +222,10 @@ export const blocksBridgeBounce = (
 };
 
 const countPendingMessages = (runDir: string): BridgeStatus["pending"] => {
-  const pending = { claude: 0, codex: 0 };
+  // Bridge messages only ever flow between claude/codex (copilot has no
+  // paired bridge participant), but `target` is typed as the broader `Agent`
+  // union, so the tally needs a slot for every agent to stay type-safe.
+  const pending = { claude: 0, codex: 0, copilot: 0 };
   for (const message of readPendingBridgeMessages(runDir).slice(
     0,
     MAX_STATUS_MESSAGES

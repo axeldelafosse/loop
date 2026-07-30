@@ -16,6 +16,7 @@ const IS_WINDOWS = process.platform === "win32";
 const LOOP_BINARY_NAME = IS_WINDOWS ? "loop.exe" : "loop";
 const CLAUDE_ALIAS_NAME = IS_WINDOWS ? "claude-loop.cmd" : "claude-loop";
 const CODEX_ALIAS_NAME = IS_WINDOWS ? "codex-loop.cmd" : "codex-loop";
+const COPILOT_ALIAS_NAME = IS_WINDOWS ? "copilot-loop.cmd" : "copilot-loop";
 const CANDIDATE_BINARIES = IS_WINDOWS
   ? ["loop.exe", "loop"]
   : ["loop", "loop.exe"];
@@ -102,10 +103,12 @@ const installAliases = async (): Promise<void> => {
   if (IS_WINDOWS) {
     await installWindowsAlias(CLAUDE_ALIAS_NAME, "--claude-only");
     await installWindowsAlias(CODEX_ALIAS_NAME, "--codex-only");
+    await installWindowsAlias(COPILOT_ALIAS_NAME, "--copilot-only");
     return;
   }
   await installUnixAlias(CLAUDE_ALIAS_NAME, "--claude-only");
   await installUnixAlias(CODEX_ALIAS_NAME, "--codex-only");
+  await installUnixAlias(COPILOT_ALIAS_NAME, "--copilot-only");
 };
 
 const installBinary = async (): Promise<void> => {

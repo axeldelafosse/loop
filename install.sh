@@ -16,6 +16,7 @@ DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loop-install.XXXXXX")"
 TARGET_PATH="${INSTALL_DIR}/loop"
 CLAUDE_LOOP_PATH="${INSTALL_DIR}/claude-loop"
 CODEX_LOOP_PATH="${INSTALL_DIR}/codex-loop"
+COPILOT_LOOP_PATH="${INSTALL_DIR}/copilot-loop"
 
 trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
 
@@ -150,11 +151,17 @@ cat > "$CODEX_LOOP_PATH" <<'EOF'
 exec "$(dirname "$0")/loop" --codex-only "$@"
 EOF
 
-chmod +x "$CLAUDE_LOOP_PATH" "$CODEX_LOOP_PATH"
+cat > "$COPILOT_LOOP_PATH" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/loop" --copilot-only "$@"
+EOF
+
+chmod +x "$CLAUDE_LOOP_PATH" "$CODEX_LOOP_PATH" "$COPILOT_LOOP_PATH"
 
 echo "Installed loop -> $TARGET_PATH"
 echo "Installed claude-loop -> $CLAUDE_LOOP_PATH"
 echo "Installed codex-loop -> $CODEX_LOOP_PATH"
+echo "Installed copilot-loop -> $COPILOT_LOOP_PATH"
 
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""

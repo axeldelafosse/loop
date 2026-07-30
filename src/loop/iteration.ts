@@ -20,8 +20,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const iterationCooldown = (i: number): Promise<void> =>
   i > 1 ? sleep(parseIterationCooldownMs()) : Promise.resolve();
 
-const lastSession = (agent: Agent): string =>
-  agent === "claude" ? getLastClaudeSessionId() : getLastCodexThreadId();
+const lastSession = (agent: Agent): string => {
+  if (agent === "claude") {
+    return getLastClaudeSessionId();
+  }
+  if (agent === "copilot") {
+    // Copilot CLI runs are stateless per iteration (no persistent SDK session tracked).
+    return "";
+  }
+  return getLastCodexThreadId();
+};
 
 export const doneText = (s: string): string => `done signal "${s}"`;
 

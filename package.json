@@ -13,6 +13,7 @@
   "bin": {
     "claude-loop": "./src/claude-loop.ts",
     "codex-loop": "./src/codex-loop.ts",
+    "copilot-loop": "./src/copilot-loop.ts",
     "loop": "./src/cli.ts"
   },
   "devDependencies": {
