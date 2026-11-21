@@ -5,6 +5,7 @@ import {
   BRIDGE_WORKER_SUBCOMMAND,
 } from "./loop/bridge-constants";
 import { runBridgeWorker } from "./loop/bridge-runtime";
+import { CAPABILITIES_FLAG, renderCapabilities } from "./loop/capabilities";
 import { closeClaudeSdk } from "./loop/claude-sdk-server";
 import { closeAppServer } from "./loop/codex-app-server";
 import {
@@ -77,6 +78,10 @@ export const runCli = async (argv: string[]): Promise<void> => {
       argv.slice(1)
     );
     await runCodexTmuxProxy(runDir, remoteUrl, threadId, port);
+    return;
+  }
+  if (argv[0] === CAPABILITIES_FLAG) {
+    console.log(renderCapabilities());
     return;
   }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -122,7 +122,7 @@ test("runInTmux starts detached session and strips --tmux", async () => {
     "/repo",
     command,
   ]);
-  expect(calls[1]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  expect(calls[1]).toEqual(["tmux", "has-session", "-t", "=repo-loop-1"]);
   expect(calls[2]).toEqual([
     "tmux",
     "set-window-option",
@@ -166,7 +166,7 @@ test("runInTmux keeps explicit run id in single-agent mode", async () => {
   );
 
   expect(delegated).toBe(true);
-  expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-alpha"]);
+  expect(calls[0]).toEqual(["tmux", "has-session", "-t", "=repo-loop-alpha"]);
   expect(calls[1]).toEqual([
     "tmux",
     "new-session",
@@ -177,7 +177,7 @@ test("runInTmux keeps explicit run id in single-agent mode", async () => {
     "/repo",
     "'env' 'LOOP_RUN_BASE=repo' 'LOOP_RUN_ID=alpha' 'bun' '/repo/src/cli.ts' '--codex-only' '--run-id' 'alpha' '--proof' 'verify'",
   ]);
-  expect(calls[2]).toEqual(["tmux", "has-session", "-t", "repo-loop-alpha"]);
+  expect(calls[2]).toEqual(["tmux", "has-session", "-t", "=repo-loop-alpha"]);
   expect(calls[3]).toEqual([
     "tmux",
     "set-window-option",
@@ -336,7 +336,7 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     { agent: "codex", kind: "work", sessionId: undefined },
   ]);
   expect(calls).toEqual([
-    ["tmux", "has-session", "-t", "repo-loop-1"],
+    ["tmux", "has-session", "-t", "=repo-loop-1"],
     [
       "claude",
       "mcp",
@@ -372,7 +372,7 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
     ],
     ["tmux", "select-layout", "-t", "repo-loop-1:0", "even-horizontal"],
     ["tmux", "select-pane", "-t", "repo-loop-1:0.1"],
-    ["tmux", "has-session", "-t", "repo-loop-1"],
+    ["tmux", "has-session", "-t", "=repo-loop-1"],
     [
       "tmux",
       "set-window-option",
@@ -381,7 +381,7 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
       "remain-on-exit",
       "on",
     ],
-    ["tmux", "has-session", "-t", "repo-loop-1"],
+    ["tmux", "has-session", "-t", "=repo-loop-1"],
   ]);
   expect(typed).toEqual([]);
   expect(logs[0]).toBe("[loop] starting paired tmux workspace...");
@@ -391,6 +391,305 @@ test("runInTmux starts paired tmux panes for Claude and Codex", async () => {
   expect(manifest.codexRemoteUrl).toBe(codexRemoteUrl);
   expect(manifest.codexThreadId).toBe("codex-thread-1");
   expect(manifest.tmuxSession).toBe("repo-loop-1");
+});
+
+// -- Host-managed startup (LOOP_HOST_MANAGED_STARTUP=1) ------------------------
+const runManagedPairedLaunch = async (
+  task: string | undefined,
+  resume = false
+): Promise<{
+  calls: string[][];
+  runDir: string;
+  sendKeyCalls: number;
+  session: string;
+}> => {
+  const calls: string[][] = [];
+  const runDir = mkdtempSync(join(tmpdir(), "loop-managed-"));
+  let sessionStarted = false;
+  let sendKeyCalls = 0;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1234,
+    repoId: "repo-123",
+    runId: "7",
+    status: "running",
+  });
+  if (resume) {
+    // Both vendor identities present => a managed RESUME (no fresh HOLD).
+    manifest = {
+      ...manifest,
+      claudeSessionId: "claude-session-1",
+      codexThreadId: "codex-thread-1",
+    };
+  }
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: join(runDir, "manifest.json"),
+    repoId: "repo-123",
+    runDir,
+    runId: "7",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: join(runDir, "transcript.jsonl"),
+  };
+  const launch = task ? { opts, task } : { opts };
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => "",
+      cwd: "/repo",
+      env: { LOOP_HOST_MANAGED_STARTUP: "1" },
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "codex-thread-1",
+      getTerminalSize: () => ({ columns: 160, rows: 48 }),
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "claude-session-1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = [
+          "-c",
+          'mcp_servers.loop-bridge.command="loop"',
+        ];
+        return { manifest, storage };
+      },
+      sendKeys: (): void => {
+        sendKeyCalls += 1;
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    launch
+  );
+  return { calls, runDir, sendKeyCalls, session: "repo-loop-7" };
+};
+
+test("host-managed startup holds, captures at creation, and sends no keys", async () => {
+  const { calls, runDir, sendKeyCalls } =
+    await runManagedPairedLaunch("Ship feature");
+  try {
+    const verb = (name: string): string[] | undefined =>
+      calls.find((c) => c[0] === "tmux" && c[1] === name);
+    const idx = (pred: (c: string[]) => boolean): number =>
+      calls.findIndex(pred);
+
+    // Behavior 1: NO synthetic consent keystroke, ever.
+    expect(sendKeyCalls).toBe(0);
+    expect(calls.some((c) => c[0] === "tmux" && c[1] === "send-keys")).toBe(
+      false
+    );
+
+    // Behavior 2: new-session + split-window are IDLE (no agent command arg), and
+    // remain-on-exit + a pipe-pane capture are armed BEFORE the agent respawns.
+    const newSession = verb("new-session");
+    expect(newSession?.at(-1)).toBe("/repo"); // last arg is -c cwd, not a command
+    const remainIdx = idx(
+      (c) => c[1] === "set-window-option" && c.includes("remain-on-exit")
+    );
+    const pipeClaudeIdx = idx(
+      (c) => c[1] === "pipe-pane" && c.includes("=repo-loop-7:0.0")
+    );
+    const pipeCodexIdx = idx(
+      (c) => c[1] === "pipe-pane" && c.includes("=repo-loop-7:0.1")
+    );
+    const respawnClaudeIdx = idx(
+      (c) => c[1] === "respawn-pane" && c.includes("repo-loop-7:0.0")
+    );
+    const respawnCodexIdx = idx(
+      (c) => c[1] === "respawn-pane" && c.includes("repo-loop-7:0.1")
+    );
+    expect(remainIdx).toBeGreaterThanOrEqual(0);
+    expect(pipeClaudeIdx).toBeGreaterThan(remainIdx);
+    expect(pipeCodexIdx).toBeGreaterThan(remainIdx);
+    expect(respawnClaudeIdx).toBeGreaterThan(pipeClaudeIdx); // capture armed before agent
+    expect(respawnCodexIdx).toBeGreaterThan(pipeCodexIdx);
+    // The pipe sink is a bounded tail with umask 077 and an atomic .part -> final publish.
+    const pipeClaude = calls[pipeClaudeIdx].at(-1) ?? "";
+    expect(pipeClaude).toContain("umask 077");
+    expect(pipeClaude).toContain("tail -c");
+    expect(pipeClaude).toContain("claude.pane.log.part");
+
+    // Behavior 3: each agent is launched with the HOLD bootstrap -- no project task,
+    // blocking on the shared barrier -- not the task.
+    const respawnClaude = calls[respawnClaudeIdx].at(-1) ?? "";
+    const respawnCodex = calls[respawnCodexIdx].at(-1) ?? "";
+    expect(respawnClaude).toContain("STARTUP HOLD");
+    expect(respawnClaude).toContain(join(runDir, ".loop-managed", "task"));
+    expect(respawnClaude).not.toContain("Ship feature"); // the task sentinel is absent
+    expect(respawnCodex).toContain("STARTUP HOLD");
+    expect(respawnCodex).not.toContain("Ship feature");
+
+    // No task payload exists anywhere under .loop-managed pre-release (the host creates the
+    // single shared barrier only after it verifies the launch).
+    const managed = join(runDir, ".loop-managed");
+    const entries = readdirSync(managed);
+    expect(entries).not.toContain("task");
+    expect(entries.some((e: string) => e.endsWith(".prompt"))).toBe(false);
+  } finally {
+    rmSync(runDir, { force: true, recursive: true });
+  }
+});
+
+test("host-managed resume does not arm startup capture (no lifecycle owner) and sends no keys", async () => {
+  // A managed RESUME (both vendor identities) has no host finalizer to detach/delete capture, so
+  // arming it would leak a raw *.pane.log past any verdict (PRAS-5). Capture must NOT be armed;
+  // the ordinary pane startup is used; the consent keystroke is still suppressed.
+  const { calls, sendKeyCalls } = await runManagedPairedLaunch(
+    "Ship feature",
+    true
+  );
+  expect(calls.some((c) => c[1] === "pipe-pane")).toBe(false); // capture NOT armed on resume
+  expect(calls.some((c) => c[1] === "respawn-pane")).toBe(false); // ordinary pane startup
+  expect(sendKeyCalls).toBe(0); // no synthetic consent keystroke
+  expect(calls.some((c) => c[1] === "send-keys")).toBe(false);
+});
+
+test("sessionExists matches exactly so a prefix-sharing session is not adopted or killed", () => {
+  // Emulate tmux target resolution: a bare name prefix/fnmatch-matches; `=name` is exact.
+  const existing = new Set(["repo-loop-1x"]); // unrelated session sharing the prefix "repo-loop-1"
+  const spawn = (args: string[]) => {
+    if (args[0] === "tmux" && args[1] === "has-session") {
+      const target = args[3] ?? "";
+      const exact = target.startsWith("=");
+      const name = exact ? target.slice(1) : target;
+      const hit = exact
+        ? existing.has(name)
+        : [...existing].some((s) => s.startsWith(name));
+      return { exitCode: hit ? 0 : 1, stderr: "" };
+    }
+    return { exitCode: 0, stderr: "" };
+  };
+  // The guard targets exactly, so our (absent) run is reported NOT existing -> it would create
+  // its own session and never adopt/kill the unrelated prefix-sharing "repo-loop-1x".
+  expect(tmuxInternals.exactTarget("repo-loop-1")).toBe("=repo-loop-1");
+  expect(tmuxInternals.sessionExists("repo-loop-1", spawn)).toBe(false);
+  // A bare (pre-fix) target WOULD have wrongly matched the unrelated session.
+  expect([...existing].some((s) => s.startsWith("repo-loop-1"))).toBe(true);
+  // The real session, once present, is found exactly.
+  existing.add("repo-loop-1");
+  expect(tmuxInternals.sessionExists("repo-loop-1", spawn)).toBe(true);
+});
+
+test("host-managed bootstrap carries no project task or source-task pointer", () => {
+  const bootstrap = tmuxInternals.buildManagedBootstrapPrompt(
+    makePairedOptions(),
+    "claude",
+    "7",
+    "server-7",
+    "/runs/7/.loop-managed/task"
+  );
+  expect(bootstrap).toContain("STARTUP HOLD");
+  expect(bootstrap).toContain("/runs/7/.loop-managed/task"); // the delivery barrier only
+  expect(bootstrap).not.toContain("Ship feature");
+  expect(bootstrap).not.toContain(".prompt"); // no source-task file pointer
+  expect(tmuxInternals.managedTaskBarrierPath("/runs/7")).toBe(
+    "/runs/7/.loop-managed/task"
+  );
+});
+
+test("isHostManagedStartup requires exactly LOOP_HOST_MANAGED_STARTUP=1", () => {
+  expect(
+    tmuxInternals.isHostManagedStartup({ LOOP_HOST_MANAGED_STARTUP: "1" })
+  ).toBe(true);
+  for (const value of ["0", "true", "yes", "on", " 1", "", undefined]) {
+    expect(
+      tmuxInternals.isHostManagedStartup({ LOOP_HOST_MANAGED_STARTUP: value })
+    ).toBe(false);
+  }
+});
+
+test("default startup (env unset) still auto-unblocks and is byte-identical", async () => {
+  // A trust prompt on the default path IS auto-answered (the behavior managed mode disables).
+  const calls: string[][] = [];
+  let sessionStarted = false;
+  let sendKeyCalls = 0;
+  let manifest = createRunManifest({
+    cwd: "/repo",
+    mode: "paired",
+    pid: 1,
+    repoId: "r",
+    runId: "9",
+    status: "running",
+  });
+  const opts = makePairedOptions();
+  const storage = {
+    manifestPath: "/repo/.loop/runs/9/manifest.json",
+    repoId: "r",
+    runDir: "/repo/.loop/runs/9",
+    runId: "9",
+    storageRoot: "/repo/.loop/runs",
+    transcriptPath: "/repo/.loop/runs/9/transcript.jsonl",
+  };
+  await runInTmux(
+    ["--tmux", "--proof", "verify with tests"],
+    {
+      capturePane: () => "Is this a project you created or one you trust?",
+      cwd: "/repo",
+      env: {}, // env UNSET -> default path
+      findBinary: () => true,
+      getCodexAppServerUrl: () => "ws://127.0.0.1:4500",
+      getLastCodexThreadId: () => "t1",
+      getTerminalSize: () => ({ columns: 80, rows: 24 }),
+      isInteractive: () => false,
+      launchArgv: ["bun", "/repo/src/cli.ts"],
+      log: (): void => undefined,
+      makeClaudeSessionId: () => "cs1",
+      preparePairedRun: (nextOpts) => {
+        nextOpts.codexMcpConfigArgs = ["-c", "x"];
+        return { manifest, storage };
+      },
+      sendKeys: (): void => {
+        sendKeyCalls += 1;
+      },
+      sendText: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      startCodexProxy: () => Promise.resolve("ws://127.0.0.1:4600/"),
+      startPersistentAgentSession: () => Promise.resolve(undefined),
+      spawn: (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tmux" && args[1] === "has-session") {
+          return sessionStarted
+            ? { exitCode: 0, stderr: "" }
+            : { exitCode: 1, stderr: "" };
+        }
+        if (args[0] === "tmux" && args[1] === "new-session") {
+          sessionStarted = true;
+        }
+        return { exitCode: 0, stderr: "" };
+      },
+      updateRunManifest: (_path, update) => {
+        manifest = update(manifest) ?? manifest;
+        return manifest;
+      },
+    },
+    { opts, task: "Ship feature" }
+  );
+  // Default path: new-session carries the agent command (not idle), no pipe-pane, and the
+  // visible trust prompt IS auto-answered with Enter (send-keys) -- the exact behavior that
+  // host-managed mode disables.
+  const newSession = calls.find((c) => c[1] === "new-session");
+  expect(newSession?.at(-1)).toContain("claude"); // command on new-session, not idle
+  expect(calls.some((c) => c[1] === "pipe-pane")).toBe(false);
+  expect(sendKeyCalls).toBeGreaterThan(0);
 });
 
 test("runInTmux releases local codex app-server handles after paired handoff", async () => {
@@ -635,7 +934,7 @@ test("runInTmux starts paired interactive tmux panes without a task", async () =
   );
 
   expect(delegated).toBe(true);
-  expect(calls[0]).toEqual(["tmux", "has-session", "-t", "repo-loop-1"]);
+  expect(calls[0]).toEqual(["tmux", "has-session", "-t", "=repo-loop-1"]);
   const env = ["LOOP_RUN_BASE=repo", "LOOP_RUN_ID=1"];
   const claudeChannelServer = tmuxInternals.buildClaudeChannelServerName(
     "1",
@@ -1553,7 +1852,7 @@ test("runInTmux resolves paired run id through an existing manifest", async () =
 
     expect(delegated).toBe(true);
     expect(calls).toEqual([
-      ["tmux", "has-session", "-t", session],
+      ["tmux", "has-session", "-t", `=${session}`],
       [
         "tmux",
         "new-session",
@@ -1564,7 +1863,7 @@ test("runInTmux resolves paired run id through an existing manifest", async () =
         process.cwd(),
         command,
       ],
-      ["tmux", "has-session", "-t", session],
+      ["tmux", "has-session", "-t", `=${session}`],
       [
         "tmux",
         "set-window-option",
@@ -1645,7 +1944,7 @@ test("runInTmux honors paired run resume from --session", async () => {
 
     expect(delegated).toBe(true);
     expect(calls).toEqual([
-      ["tmux", "has-session", "-t", session],
+      ["tmux", "has-session", "-t", `=${session}`],
       [
         "tmux",
         "new-session",
@@ -1656,7 +1955,7 @@ test("runInTmux honors paired run resume from --session", async () => {
         process.cwd(),
         command,
       ],
-      ["tmux", "has-session", "-t", session],
+      ["tmux", "has-session", "-t", `=${session}`],
       [
         "tmux",
         "set-window-option",
@@ -1720,7 +2019,7 @@ test("runInTmux resolves paired resume from a worktree using git common dir", as
 
   expect(delegated).toBe(true);
   expect(calls).toEqual([
-    ["tmux", "has-session", "-t", session],
+    ["tmux", "has-session", "-t", `=${session}`],
     [
       "tmux",
       "new-session",
@@ -1731,7 +2030,7 @@ test("runInTmux resolves paired resume from a worktree using git common dir", as
       "/repo-loop-alpha",
       command,
     ],
-    ["tmux", "has-session", "-t", session],
+    ["tmux", "has-session", "-t", `=${session}`],
     ["tmux", "set-window-option", "-t", `${session}:0`, "remain-on-exit", "on"],
   ]);
 });
@@ -1787,7 +2086,7 @@ test("runInTmux strips a worktree suffix when git metadata is unavailable", asyn
 
   expect(delegated).toBe(true);
   expect(calls).toEqual([
-    ["tmux", "has-session", "-t", session],
+    ["tmux", "has-session", "-t", `=${session}`],
     [
       "tmux",
       "new-session",
@@ -1798,7 +2097,7 @@ test("runInTmux strips a worktree suffix when git metadata is unavailable", asyn
       "/repo-loop-alpha",
       command,
     ],
-    ["tmux", "has-session", "-t", session],
+    ["tmux", "has-session", "-t", `=${session}`],
     ["tmux", "set-window-option", "-t", `${session}:0`, "remain-on-exit", "on"],
   ]);
 });
@@ -1849,7 +2148,7 @@ test("runInTmux resolves raw stored session ids from --session", async () => {
 
       expect(delegated).toBe(true);
       expect(calls).toEqual([
-        ["tmux", "has-session", "-t", session],
+        ["tmux", "has-session", "-t", `=${session}`],
         [
           "tmux",
           "new-session",
@@ -1860,7 +2159,7 @@ test("runInTmux resolves raw stored session ids from --session", async () => {
           process.cwd(),
           command,
         ],
-        ["tmux", "has-session", "-t", session],
+        ["tmux", "has-session", "-t", `=${session}`],
         [
           "tmux",
           "set-window-option",
@@ -1929,7 +2228,7 @@ test("runInTmux ignores an unresolved raw session id in paired mode", async () =
         process.cwd(),
         command,
       ],
-      ["tmux", "has-session", "-t", `${runBase}-loop-1`],
+      ["tmux", "has-session", "-t", `=${runBase}-loop-1`],
       [
         "tmux",
         "set-window-option",
@@ -2006,7 +2305,7 @@ test("runInTmux keeps raw --session values in single-agent mode", async () => {
         "/repo",
         command,
       ],
-      ["tmux", "has-session", "-t", "repo-loop-1"],
+      ["tmux", "has-session", "-t", "=repo-loop-1"],
       [
         "tmux",
         "set-window-option",
@@ -2043,7 +2342,7 @@ test("runInTmux increments session index on conflicts", async () => {
   expect(delegated).toBe(true);
   expect(calls[0]?.[4]).toBe("repo-loop-1");
   expect(calls[1]?.[4]).toBe("repo-loop-2");
-  expect(calls[2]).toEqual(["tmux", "has-session", "-t", "repo-loop-2"]);
+  expect(calls[2]).toEqual(["tmux", "has-session", "-t", "=repo-loop-2"]);
   expect(calls[3]).toEqual([
     "tmux",
     "set-window-option",
