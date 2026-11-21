@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "bun";
 import {
@@ -115,6 +115,42 @@ const quoteShellArg = (value: string): string =>
 
 const buildShellCommand = (argv: string[]): string =>
   argv.map(quoteShellArg).join(" ");
+
+// -- Host-managed startup (opt-in, LOOP_HOST_MANAGED_STARTUP=1) ----------------
+// When the HOST launcher sets LOOP_HOST_MANAGED_STARTUP=1, loop delegates three startup
+// concerns to the host so they are verified before any project work runs:
+//   1. no automatic consent keystrokes (unblockClaudePane is skipped; a genuine prompt is
+//      left for the present operator to handle);
+//   2. pane retention/capture is initialized AT CREATION (remain-on-exit set + a bounded
+//      tail pipe armed BEFORE the agent process can exit), scoped to this run's window only --
+//      no shared-server/global change, no unrelated session touched;
+//   3. the task is HELD via a cooperative, application-level delivery barrier: each agent is
+//      launched with a role/bridge BOOTSTRAP that carries NO project task and NO source-task
+//      pointer, and blocks on a single shared barrier file that does not exist yet. The HOST
+//      is the only component that creates that barrier -- with the task payload -- and only
+//      AFTER it has verified the launched model/effort + run identity. (Same-UID agents can
+//      read the filesystem; this is the strongest cooperative barrier short of an OS sandbox,
+//      not a claim of inaccessibility.)
+// The hold engages only for a genuinely FRESH agent (no prior vendor session); a resume
+// carries no new task and is not held. Default (env unset / != "1") startup is byte-identical.
+const HOST_MANAGED_STARTUP_ENV = "LOOP_HOST_MANAGED_STARTUP";
+const HOST_MANAGED_STARTUP_VALUE = "1";
+const MANAGED_DIR_NAME = ".loop-managed";
+const MANAGED_TASK_BARRIER = "task"; // <runDir>/.loop-managed/task -- shared release barrier
+const MANAGED_PANE_LOG_CAP_BYTES = 262_144; // bounded tail retained per pane (256 KiB)
+
+const isHostManagedStartup = (env: NodeJS.ProcessEnv): boolean =>
+  env[HOST_MANAGED_STARTUP_ENV] === HOST_MANAGED_STARTUP_VALUE;
+
+const managedDir = (runDir: string): string => join(runDir, MANAGED_DIR_NAME);
+
+// The single shared delivery barrier: absent at launch; the host creates it (with the task)
+// only after verification, and both agents' bootstraps block on this exact path.
+const managedTaskBarrierPath = (runDir: string): string =>
+  join(managedDir(runDir), MANAGED_TASK_BARRIER);
+
+const managedPaneLogPath = (runDir: string, agent: Agent): string =>
+  join(managedDir(runDir), `${agent}.pane.log`);
 
 const spawnDetachedProcess = (
   argv: string[],
@@ -236,6 +272,50 @@ const buildPeerPrompt = (
   parts.push(
     `Wait for ${primary} to send you a targeted request or review ask.`
   );
+  return parts.join("\n\n");
+};
+
+// The per-agent HOLD directive (behavior 3): block on the shared barrier, then perform exactly
+// the task it delivers. Carries NO project task and NO source-task pointer.
+const buildManagedHoldDirective = (barrierPath: string): string => {
+  const quoted = quoteShellArg(barrierPath);
+  return [
+    "STARTUP HOLD (host-managed launch): your task has NOT been delivered yet. The host verifies",
+    "this run's launched model/effort and run identity first, then delivers your task.",
+    "Take NO action -- no edits, commits, messages, file reads, or other tool calls -- until then.",
+    "As your FIRST and ONLY action now, run exactly this command, wait for it to return, then",
+    "perform exactly the task it prints:",
+    "",
+    `  while [ ! -f ${quoted} ]; do sleep 1; done; cat ${quoted}`,
+    "",
+    "Do not proceed past that command until it returns your task.",
+  ].join("\n");
+};
+
+// The bootstrap a FRESH managed agent is launched with instead of its task prompt: the same
+// role + bridge + workflow framing as the normal prompt, but the task section is replaced by
+// the hold directive. No project task or pointer is present (behavior 3).
+const buildManagedBootstrapPrompt = (
+  opts: Options,
+  agent: Agent,
+  runId: string,
+  serverName: string,
+  barrierPath: string
+): string => {
+  const isPrimary = agent === opts.agent;
+  const parts: string[] = [];
+  if (isPrimary) {
+    parts.push(
+      `Agent-to-agent pair programming: you are the primary ${capitalize(opts.agent)} agent for this run.`
+    );
+  } else {
+    parts.push(
+      `Agent-to-agent pair programming: ${capitalize(opts.agent)} is the primary agent for this run. You are ${capitalize(agent)}.`
+    );
+  }
+  parts.push(buildManagedHoldDirective(barrierPath));
+  parts.push(pairedBridgeGuidance(agent, runId, serverName));
+  parts.push(pairedWorkflowGuidance(opts, agent));
   return parts.join("\n\n");
 };
 
@@ -573,11 +653,16 @@ const buildSessionSizeArgs = (deps: TmuxDeps): string[] => {
   return ["-x", String(size.columns), "-y", String(size.rows)];
 };
 
+// tmux `-t` prefix/fnmatch-matches a session name, so a bare name can adopt or destroy an
+// unrelated session that merely shares a prefix. The `=` operator forces an exact match; every
+// path that checks for, attaches, captures, or kills THIS run's session targets it exactly.
+const exactTarget = (target: string): string => `=${target}`;
+
 const sessionExists = (
   session: string,
   spawnFn: TmuxDeps["spawn"]
 ): boolean => {
-  const result = spawnFn(["tmux", "has-session", "-t", session]);
+  const result = spawnFn(["tmux", "has-session", "-t", exactTarget(session)]);
   return result.exitCode === 0;
 };
 
@@ -665,7 +750,7 @@ const cleanupFailedPairedSessionStart = (
 ): void => {
   try {
     if (sessionExists(session, deps.spawn)) {
-      deps.spawn(["tmux", "kill-session", "-t", session]);
+      deps.spawn(["tmux", "kill-session", "-t", exactTarget(session)]);
     }
   } catch {
     // Best-effort cleanup after a failed paired startup.
@@ -813,6 +898,102 @@ const unblockClaudePane = async (
   }
 };
 
+// Arm a bounded, 0600 tail capture on a pane (behavior 2). Deletes any stale log first so the
+// host's post-detach poll can only observe THIS arm, buffers the last CAP bytes, and publishes
+// <log> atomically via rename at EOF (pane death or host detach). umask 077 in the sink. The
+// host detaches, waits for <log>, reads a redacted tail, deletes it, and fails closed if <log>
+// never appears. tail(1) keeps a bounded window; the externally-guaranteed properties are the
+// hard byte cap, the atomic publish, and that no raw log persists past the host's verdict.
+const armManagedPaneCapture = (
+  deps: TmuxDeps,
+  pane: string,
+  logPath: string
+): void => {
+  rmSync(logPath, { force: true });
+  rmSync(`${logPath}.part`, { force: true });
+  const part = quoteShellArg(`${logPath}.part`);
+  const final = quoteShellArg(logPath);
+  const sink = `umask 077; tail -c ${MANAGED_PANE_LOG_CAP_BYTES} > ${part} 2>/dev/null; mv -f ${part} ${final}`;
+  runTmuxCommand(
+    deps,
+    ["tmux", "pipe-pane", "-t", pane, sink],
+    "Failed to arm managed pane capture"
+  );
+};
+
+// Host-managed pane startup: create IDLE shells, set remain-on-exit on this run's window BEFORE
+// either agent can exit, arm a bounded tail capture per pane, then respawn each pane with its
+// agent command (behavior 2). The caller skips unblockClaudePane (behavior 1).
+const startPanesHostManaged = (
+  deps: TmuxDeps,
+  session: string,
+  runDir: string,
+  claudeCommand: string,
+  codexCommand: string
+): void => {
+  mkdirSync(managedDir(runDir), { recursive: true, mode: 0o700 });
+  runTmuxCommand(deps, [
+    "tmux",
+    "new-session",
+    "-d",
+    ...buildSessionSizeArgs(deps),
+    "-s",
+    session,
+    "-c",
+    deps.cwd,
+  ]);
+  runTmuxCommand(deps, [
+    "tmux",
+    "set-window-option",
+    "-t",
+    `${session}:0`,
+    "remain-on-exit",
+    "on",
+  ]);
+  runTmuxCommand(
+    deps,
+    ["tmux", "split-window", "-h", "-t", `${session}:0`, "-c", deps.cwd],
+    "Failed to split tmux window"
+  );
+  // The CAPTURE pipe is exact-targeted (Codex: capture is a path that establishes retention for
+  // this run); the surrounding establish ops act on the session we just created by exact name,
+  // which tmux resolves exact-first, so they need no `=`.
+  armManagedPaneCapture(
+    deps,
+    exactTarget(`${session}:0.0`),
+    managedPaneLogPath(runDir, "claude")
+  );
+  armManagedPaneCapture(
+    deps,
+    exactTarget(`${session}:0.1`),
+    managedPaneLogPath(runDir, "codex")
+  );
+  runTmuxCommand(deps, [
+    "tmux",
+    "respawn-pane",
+    "-k",
+    "-t",
+    `${session}:0.0`,
+    "-c",
+    deps.cwd,
+    claudeCommand,
+  ]);
+  runTmuxCommand(
+    deps,
+    [
+      "tmux",
+      "respawn-pane",
+      "-k",
+      "-t",
+      `${session}:0.1`,
+      "-c",
+      deps.cwd,
+      codexCommand,
+    ],
+    "Failed to start Codex pane"
+  );
+};
+
 const startPairedSession = async (
   deps: TmuxDeps,
   launch: PairedTmuxLaunch
@@ -856,18 +1037,42 @@ const startPairedSession = async (
       `${RUN_BASE_ENV}=${runBase}`,
       `${RUN_ID_ENV}=${storage.runId}`,
     ];
-    const claudePrompt = buildLaunchPrompt(
-      launch,
-      "claude",
-      storage.runId,
-      claudeChannelServer
-    );
-    const codexPrompt = buildLaunchPrompt(
-      launch,
-      "codex",
-      storage.runId,
-      claudeChannelServer
-    );
+    const hostManaged = isHostManagedStartup(deps.env);
+    // Host-managed startup's HOLD + startup capture are a FRESH-launch feature: the host
+    // finalizer that verifies, then detaches/cleans the capture only runs on a fresh launch
+    // (agent-loop-start). A managed RESUME (both vendor identities present) has no such owner, so
+    // it must NOT arm capture (which would otherwise publish a raw log with nobody to detach or
+    // delete it); it still skips the consent keystroke. So capture/HOLD panes are fresh-only;
+    // resume (and the default path) use the ordinary pane startup.
+    const freshManaged = hostManaged && !hadClaudeSession && !hadCodexThread;
+    const barrierPath = managedTaskBarrierPath(storage.runDir);
+    // The prompt each pane is launched with: a RESUMED agent gets none; a FRESH agent gets its
+    // task prompt normally, OR -- in host-managed mode -- a role/bridge BOOTSTRAP that carries
+    // no project task and blocks on the host-created barrier (behavior 3). The full task prompt
+    // is only built on the default path; in managed mode the host owns the task.
+    const launchPromptFor = (
+      agent: Agent,
+      had: boolean
+    ): string | undefined => {
+      if (had) {
+        return undefined;
+      }
+      if (hostManaged) {
+        return buildManagedBootstrapPrompt(
+          launch.opts,
+          agent,
+          storage.runId,
+          claudeChannelServer,
+          barrierPath
+        );
+      }
+      return buildLaunchPrompt(
+        launch,
+        agent,
+        storage.runId,
+        claudeChannelServer
+      );
+    };
     const claudeCommand = buildShellCommand([
       "env",
       ...env,
@@ -876,7 +1081,7 @@ const startPairedSession = async (
         resolveTmuxModel("claude", launch.opts),
         claudeChannelServer,
         hadClaudeSession,
-        hadClaudeSession ? undefined : claudePrompt
+        launchPromptFor("claude", hadClaudeSession)
       ),
     ]);
     const codexCommand = buildShellCommand([
@@ -886,35 +1091,45 @@ const startPairedSession = async (
         codexProxyUrl,
         resolveTmuxModel("codex", launch.opts),
         launch.opts.codexMcpConfigArgs ?? [],
-        hadCodexThread ? undefined : codexPrompt
+        launchPromptFor("codex", hadCodexThread)
       ),
     ]);
 
-    runTmuxCommand(deps, [
-      "tmux",
-      "new-session",
-      "-d",
-      ...buildSessionSizeArgs(deps),
-      "-s",
-      session,
-      "-c",
-      deps.cwd,
-      claudeCommand,
-    ]);
-    runTmuxCommand(
-      deps,
-      [
+    if (freshManaged) {
+      startPanesHostManaged(
+        deps,
+        session,
+        storage.runDir,
+        claudeCommand,
+        codexCommand
+      );
+    } else {
+      runTmuxCommand(deps, [
         "tmux",
-        "split-window",
-        "-h",
-        "-t",
-        `${session}:0`,
+        "new-session",
+        "-d",
+        ...buildSessionSizeArgs(deps),
+        "-s",
+        session,
         "-c",
         deps.cwd,
-        codexCommand,
-      ],
-      "Failed to split tmux window"
-    );
+        claudeCommand,
+      ]);
+      runTmuxCommand(
+        deps,
+        [
+          "tmux",
+          "split-window",
+          "-h",
+          "-t",
+          `${session}:0`,
+          "-c",
+          deps.cwd,
+          codexCommand,
+        ],
+        "Failed to split tmux window"
+      );
+    }
     deps.spawn([
       "tmux",
       "select-layout",
@@ -922,7 +1137,11 @@ const startPairedSession = async (
       `${session}:0`,
       "even-horizontal",
     ]);
-    await unblockClaudePane(session, deps);
+    // Behavior 1: in managed mode the host sends no synthetic consent keystrokes; a genuine
+    // prompt is left for the operator. The default path keeps the existing auto-unblock.
+    if (!hostManaged) {
+      await unblockClaudePane(session, deps);
+    }
     const primaryPane =
       launch.opts.agent === "claude" ? `${session}:0.0` : `${session}:0.1`;
     deps.spawn(["tmux", "select-pane", "-t", primaryPane]);
@@ -1016,7 +1235,7 @@ const startAutoSession = (
 
 const defaultDeps = (): TmuxDeps => ({
   attach: (session: string) => {
-    const result = spawnSync(["tmux", "attach", "-t", session], {
+    const result = spawnSync(["tmux", "attach", "-t", exactTarget(session)], {
       stderr: "inherit",
       stdin: "inherit",
       stdout: "inherit",
@@ -1194,14 +1413,23 @@ export const tmuxInternals = {
   buildInteractivePrimaryPrompt,
   buildLaunchArgv,
   buildLaunchPrompt,
+  buildManagedBootstrapPrompt,
   buildPeerPrompt,
   buildPrimaryPrompt,
   buildRunName,
   buildShellCommand,
+  exactTarget,
+  sessionExists,
   spawnDetachedProcess,
+  isHostManagedStartup,
   isSessionConflict,
+  managedDir,
+  managedPaneLogPath,
+  managedTaskBarrierPath,
   quoteShellArg,
   sanitizeBase,
   stripTmuxFlag,
   worktreeAvailable,
 };
+
+export const HOST_MANAGED_STARTUP_ENV_NAME = HOST_MANAGED_STARTUP_ENV;
